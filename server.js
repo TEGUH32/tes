@@ -9,7 +9,7 @@ const app = express();
 // Vercel environment configuration
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s';
-const CHAT_ID = process.env.CHAT_ID || 'YOUR_CHAT_ID_HERE';
+const CHAT_ID = process.env.CHAT_ID || '6834832649';
 
 // Initialize Telegram Bot (only if token is provided)
 let bot;
