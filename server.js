@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 // Konfigurasi dari environment variables
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || 'YOUR_CHAT_ID';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '6834832649';
 
 // Inisialisasi bot jika token tersedia
 let bot = null;
