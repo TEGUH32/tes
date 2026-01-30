@@ -1,0 +1,16 @@
+{
+  "name": "tracking-system",
+  "version": "1.0.0",
+  "description": "Advanced tracking system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.61.0",
+    "geoip-lite": "^1.4.7",
+    "https": "^1.0.0",
+    "crypto": "^1.0.1"
+  }
+}
