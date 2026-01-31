@@ -1,5 +1,5 @@
 {
-  "name": "advanced-phishing-tracker",
+  "name": "ultimate-phishing-tracker",
   "version": "2.0.0",
   "main": "server.js",
   "scripts": {
@@ -8,10 +8,8 @@
   "dependencies": {
     "express": "^4.18.2",
     "node-telegram-bot-api": "^0.61.0",
-    "geoip-lite": "^1.4.7",
-    "i18n-iso-countries": "^7.5.0"
-  },
-  "engines": {
-    "node": ">=18.x"
+    "crypto": "^1.0.1",
+    "moment": "^2.29.4",
+    "axios": "^1.6.2"
   }
 }
