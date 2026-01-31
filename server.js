@@ -421,7 +421,6 @@ const securityMiddleware = {
         
         const ip = req.ip || req.connection.remoteAddress;
         const suspiciousIPs = [
-            '127.0.0.1',
             '192.168.',
             '10.',
             '172.16.',
