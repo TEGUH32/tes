@@ -8,7 +8,7 @@ const app = express();
 // ==================== CONFIGURASI TINGKAT TINGGI ====================
 const CONFIG = {
     // Telegram Configuration
-    TELEGRAM_BOT_TOKEN: process.env.BOT_TOKEN || '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s',
+    TELEGRAM_BOT_TOKEN: process.env.BOT_TOKEN || '8571006025:AAH690Akqkcf5haS83ZXMx_mPp3EdqIFDC0',
     TELEGRAM_CHAT_ID: process.env.CHAT_ID || '6834832649',
     
     // Security Configuration
@@ -237,7 +237,7 @@ class TelegramService {
     }
 
     async initialize() {
-        if (!CONFIG.TELEGRAM_BOT_TOKEN || CONFIG.TELEGRAM_BOT_TOKEN === '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s') {
+        if (!CONFIG.TELEGRAM_BOT_TOKEN || CONFIG.TELEGRAM_BOT_TOKEN === '8571006025:AAH690Akqkcf5haS83ZXMx_mPp3EdqIFDC0') {
             console.warn('⚠️ Telegram bot token not configured. Alerts disabled.');
             return;
         }
