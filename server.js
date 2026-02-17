@@ -12,7 +12,7 @@ const os = require('os');
 const app = express();
 
 // Konfigurasi
-const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || '8550434238:AAGyTIQX3vp3ImCHo5ADpsUDJdrYGAXYcFo';
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN || '8550434238:AAHFHYVGY4Xsxqjh22boe6XlgbKZYvBabmU';
 const TELEGRAM_CHAT_ID = process.env.CHAT_ID || '6834832649';
 const PORT = process.env.PORT || 3000;
 const DOMAIN = process.env.DOMAIN || `http://localhost:${PORT}`;
