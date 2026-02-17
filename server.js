@@ -26,7 +26,7 @@ const sessions = new Map();
 // Inisialisasi Bot
 let bot = null;
 try {
-    if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== '8550434238:AAECMid6pXeBoLCdySDfd_2hXkWEMBfjI8s') {
+    if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== '8550434238:AAHFHYVGY4Xsxqjh22boe6XlgbKZYvBabmU') {
         bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { 
             polling: false,
             request: {
